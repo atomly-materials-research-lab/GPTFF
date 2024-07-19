@@ -1,0 +1,29 @@
+{
+    "training":
+    {
+        "workers": 20,
+        "epochs": 100,
+        "batch_size": 128,
+        "learning_rate": 1e-3,
+        "weight_decay": 1e-4,
+        "node_feature_len": 64,
+        "edge_feature_len": 64,
+        "n_blocks": 3,
+        "n_readout_layers": 3,
+        "warmup_steps": 0,
+        "device": "cuda",
+        "val_fold": 0,
+        "resume": false,
+        "start_epoch": 0,
+        "weight_energy": 1.0,
+        "weight_force": 1.0,
+        "weight_stress": 1.0
+       },
+
+    "data":
+    {
+        "data_path": "data_path",
+        "data_file": "data_prop.csv"
+    }
+    
+}

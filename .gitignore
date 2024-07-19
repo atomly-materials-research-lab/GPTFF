@@ -1,0 +1,7 @@
+*.txt
+test*
+*.pth
+build*
+__pycache__
+*.sh
+main.py

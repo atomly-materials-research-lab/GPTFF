@@ -1,0 +1,16 @@
+[build-system]
+requires = ["Cython", "setuptools", "wheel", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gptff"
+version = "0.1.2"
+description = "[placeholder]"
+authors = [{ name = "Fankai Xie", email = "fankaixie@iphy.ac.cn" }]
+requires-python = ">=3.8"
+
+[tool.setuptools.packages]
+find = { include = ["gptff*"], exclude = ["test*"] }
+
+[project.scripts]
+gptff_trainer = "gptff.trainer.trainer:main"
