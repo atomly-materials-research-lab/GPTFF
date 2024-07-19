@@ -14,6 +14,7 @@
         "device": "cuda",
         "val_fold": 0,
         "resume": false,
+        "transformer_activate": false,
         "start_epoch": 0,
         "weight_energy": 1.0,
         "weight_force": 1.0,

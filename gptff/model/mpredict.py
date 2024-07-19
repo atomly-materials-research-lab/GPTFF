@@ -18,9 +18,8 @@ from ase.optimize.optimize import Optimizer
 from ase.optimize.sciopt import SciPyFminBFGS, SciPyFminCG
 from ase.constraints import ExpCellFilter, StrainFilter
 from ase.phonons import Phonons
-from pymatgen.optimization.neighbors import find_points_in_spheres
 from tqdm import tqdm
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from pymatgen.core.composition import Composition
 from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
@@ -153,12 +152,18 @@ class ASECalculator(Calculator):
 
     implemented_properties = ["energy", "free_energy", "forces", "stress"]
 
-    def __init__(self, model_path, n_layers=4, **kwargs):
+    def __init__(self, model_path, device='cuda', **kwargs):
         super().__init__(**kwargs)
-        self.model = model.tModLodaer(n_layers=n_layers)
 
-        self.model.load_state_dict(torch.load(model_path)['state_dict'])
-        self.model = self.model.cuda()
+        self.state = torch.load(model_path)
+
+        if self.state['cfg']['transformer_activate']:
+            self.model = model.tModLodaer_t(n_layers=self.state['cfg']['n_layers'])
+        else:
+            self.model = model.tModLodaer(n_layers=self.state['cfg']['n_layers'])
+
+        self.model.load_state_dict(self.state['state_dict'])
+        self.model = self.model.to(device)
         self.graph = custom_graph()
 
     def get_efs(self, data):

@@ -9,6 +9,18 @@ description = "[placeholder]"
 authors = [{ name = "Fankai Xie", email = "fankaixie@iphy.ac.cn" }]
 requires-python = ">=3.8"
 
+dependencies = [
+    "ase>=3.22.1",
+    "torch>=1.6",
+    "pymatgen",
+    "pandas",
+    "tqdm",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+]
+
+
 [tool.setuptools.packages]
 find = { include = ["gptff*"], exclude = ["test*"] }
 

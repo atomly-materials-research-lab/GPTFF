@@ -162,26 +162,18 @@ class TransformerBlock(nn.Module):
         super(TransformerBlock, self).__init__()
         encoder_layer = nn.TransformerEncoderLayer(d_model=atom_fea_len, nhead=2, dim_feedforward=256, activation='gelu', batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
-        # self.downsampling = nn.Linear(atom_fea_len, atom_fea_len)
 
     def forward(self, atom_fea, masks):
-        # h = torch.cat([atom_fea, angular_fea], dim=1)
-        # h = atom_fea
-        # h_shape = h.shape
-        # print(h_shape)
-        # print(h.view(1, h_shape[0], h_shape[1]).shape)
         out = self.encoder(atom_fea, src_key_padding_mask=masks)
-        # out = self.downsampling(out)
-        # out = out.view(h_shape[0], h_shape[1] )
         return out
 
-class tModLodaer(nn.Module):
+class tModLodaer_t(nn.Module):
     def __init__(self, atom_fea_len=64,
                         nbr_fea_len=64,
-                        n_layers=4
+                        n_layers=4,
                         ):
         
-        super(tModLodaer, self).__init__()
+        super(tModLodaer_t, self).__init__()
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -238,7 +230,7 @@ class tModLodaer(nn.Module):
                           ], dim=-1)
 
         edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
-
+        
         max_len = torch.max(n_atoms)
         # print(max_len)
         masks = torch.ones(len(n_atoms), max_len)
@@ -264,6 +256,81 @@ class tModLodaer(nn.Module):
 
             # atom_fea = torch.cat([transformer(torch.index_select(atom_fea, 0, idx_map)) for idx_map in crystal_atom_idx], dim=0) + atom_fea
             atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
+
+        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).cuda()
+        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).cuda(), n_atoms), atom_fea)
+        
+        cry_fea = self.swish(self.fc1(cry_fea))
+        cry_fea = self.swish(self.fc2(cry_fea))
+        
+        out = self.fc_out(cry_fea)
+
+        return out
+
+
+class tModLodaer(nn.Module):
+    def __init__(self, atom_fea_len=64,
+                        nbr_fea_len=64,
+                        n_layers=4,
+                        ):
+        
+        super(tModLodaer, self).__init__()
+
+        self.atom_fea_len = atom_fea_len
+        self.nbr_fea_len = nbr_fea_len
+        self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
+        self.w_b = nn.Linear(16, nbr_fea_len)
+        self.w_eij = nn.Linear(nbr_fea_len* 3, nbr_fea_len)
+        self.w_r = nn.Linear(16, nbr_fea_len)
+
+        self.convs = nn.ModuleList([ConvLayer(atom_fea_len=atom_fea_len,
+                                    nbr_fea_len=nbr_fea_len)
+                                    for _ in range(n_layers)])
+        
+        self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
+                                    nbr_fea_len=nbr_fea_len) for _ in range(n_layers)])
+
+        self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len)
+                                          for _ in range(n_layers))
+
+        self.swish = nn.SiLU()
+        self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
+        self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
+        
+        self.fc_out = nn.Linear(atom_fea_len, 1)
+
+    def forward(self, atom_fea, bonds_r, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices):
+        """
+        atom_fea: [N,1]
+        bonds_r: [M]
+        triple_dist_ij: [L]
+        triple_dist_ik: [L]
+        triple_a_jik: [L]
+        nbr_atoms: [M, 2]
+        n_bond_pairs_bond: [M]
+        """
+
+        atom_fea = atom_fea.squeeze()
+        atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
+        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
+        bonds = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
+        
+        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5)
+        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5)
+
+        edge_ij = self.w_b(bonds)
+
+        edge_ij = torch.cat([atom_fea[nbr_atoms[:, 0]],
+                          atom_fea[nbr_atoms[:, 1]],
+                          edge_ij
+                          ], dim=-1)
+
+        edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
+        
+        for edge_func, conv, three in zip(self.edge_updates, self.convs, self.three):
+            edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
+            atom_fea = conv(atom_fea, edge_ij, bonds_dist, nbr_atoms)
 
         cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).cuda()
         cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).cuda(), n_atoms), atom_fea)

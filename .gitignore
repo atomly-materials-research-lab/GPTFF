@@ -1,6 +1,5 @@
 *.txt
 test*
-*.pth
 build*
 __pycache__
 *.sh

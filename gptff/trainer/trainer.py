@@ -21,7 +21,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from gptff.utils_.data import Mydataset, collate_fn, CosineAnnealingWarmupRestarts
-from gptff.model.model import tModLodaer
+from gptff.model.model import tModLodaer, tModLodaer_t
 from torch.cuda.amp import autocast, GradScaler
 from datetime import datetime
 import json
@@ -55,8 +55,10 @@ class CFG:
     w1 = js['training']['weight_energy']
     w2 = js['training']['weight_force']
     w3 = js['training']['weight_stress']
+    transformer_activate = js['training']['transformer_activate']
     unit_trans = 160.21766208
 
+cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}
 
 # Read data
 
@@ -83,7 +85,10 @@ val_loader = DataLoader(val_dataset, batch_size=32,
 
 # build model
 
-model = tModLodaer()
+if CFG.transformer_activate:
+    model = tModLodaer_t()
+else:
+    model = tModLodaer()
 
 if CFG.device == 'cuda':
     model.cuda()
@@ -400,6 +405,7 @@ def main():
                 'state_dict': model.state_dict(),
                 'best_mae_error': best_mae_error,
                 'optimizer': optimizer.state_dict(),
+                'cfg': cfg_args
             }
 
         torch.save(model_state, './curr_checkpoint.pth')

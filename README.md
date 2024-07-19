@@ -11,8 +11,8 @@ conda create -n gptff python=3.8
 Then clone the `GPTFF` repo and install:
 
 ```bash
-git clone xxx
-cd gptff
+git clone https://github.com/fkxie/GPTFF.git
+cd GPTFF
 pip install .
 ```
 
@@ -25,9 +25,8 @@ from gptff.model.mpredict import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-model_weight = "xxx"
-n_layers = 3
-p = ASECalculator(model_weight, n_layers) # Initialize the model and load weights
+model_weight = "pretrained/gptff_v1.pth"
+p = ASECalculator(model_weight) # Initialize the model and load weights
 
 adp = AseAtomsAdaptor()
 struc = Structure.from_file('POSCAR_structure')
@@ -50,9 +49,8 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
 from ase.constraints import ExpCellFilter, StrainFilter
 
-model_weight = "xxx"
-n_layers = 3
-p = ASECalculator(model_weight, n_layers) # Initialize the model and load weights
+model_weight = "pretrained/gptff_v1.pth"
+p = ASECalculator(model_weight) # Initialize the model and load weights
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 
@@ -75,9 +73,8 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
 from ase.optimize.bfgs import BFGS
 
-model_weight = "xxx"
-n_layers = 3
-p = ASECalculator(model_weight, n_layers) # Initialize the model and load weights
+model_weight = "pretrained/gptff_v1.pth"
+p = ASECalculator(model_weight) # Initialize the model and load weights
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 
@@ -90,6 +87,7 @@ optimizer.run(fmax=0.01, steps=1000)
 ```
 
 **Molecular dynamics (ASE):**
+We will support `LAMMPS` with `GPTFF` later.
 
 ```python
 from gptff.model.mpredict import ASECalculator
@@ -99,9 +97,8 @@ from ase import Atoms, units
 from ase.md.nvtberendsen import NVTBerendsen
 import os
 
-model_weight = "xxx"
-n_layers = 3
-p = ASECalculator(model_weight, n_layers) # Initialize the model and load weights
+model_weight = "pretrained/gptff_v1.pth"
+p = ASECalculator(model_weight) # Initialize the model and load weights
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 
