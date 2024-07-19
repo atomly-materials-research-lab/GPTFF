@@ -5,8 +5,10 @@ import numpy as np
 
 
 class ThreeBody(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len):
+    def __init__(self, atom_fea_len, nbr_fea_len, device):
         super(ThreeBody, self).__init__()
+
+        self.device = device
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
         self.angle_embedding = nn.Linear(1, nbr_fea_len)
@@ -49,7 +51,7 @@ class ThreeBody(nn.Module):
         # mat = angles_mat * bonds_mat * atom_fea_ik
 
         # atom_nbr_fea_ik = self.sig(mat)  # N, M, M-1, atom_fea
-        edge_ij = torch.index_add(edge_ij, 0, torch.repeat_interleave(torch.arange(n_bond_pairs_bond.shape[0]).cuda(), n_bond_pairs_bond), atom_fea_ik)
+        edge_ij = torch.index_add(edge_ij, 0, torch.repeat_interleave(torch.arange(n_bond_pairs_bond.shape[0]).to(self.device), n_bond_pairs_bond), atom_fea_ik)
         return edge_ij
 
 class EdgeUpdate(nn.Module):
@@ -102,9 +104,9 @@ class ConvLayer(nn.Module):
 
         return atom_fea
 
-def ebf(d_ij, rcut):
+def ebf(d_ij, rcut, device):
     radius = rcut
-    filters = torch.arange(0, 16, 1).cuda()
+    filters = torch.arange(0, 16, 1).to(device)
     return torch.sqrt(torch.tensor(2.) / radius) * torch.sin(filters * torch.pi / radius * d_ij) / d_ij
 
 class Attention(nn.Module):
@@ -168,12 +170,16 @@ class TransformerBlock(nn.Module):
         return out
 
 class tModLodaer_t(nn.Module):
-    def __init__(self, atom_fea_len=64,
-                        nbr_fea_len=64,
-                        n_layers=4,
+    def __init__(self, CFG
                         ):
         
         super(tModLodaer_t, self).__init__()
+
+        atom_fea_len = CFG.node_feature_len
+        nbr_fea_len = CFG.edge_feature_len
+        n_layers = CFG.n_layers
+
+        self.device = CFG.device
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -187,7 +193,7 @@ class tModLodaer_t(nn.Module):
                                     for _ in range(n_layers)])
         
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len) for _ in range(n_layers)])
+                                    nbr_fea_len=nbr_fea_len, device=self.device) for _ in range(n_layers)])
 
         self.transformers = nn.ModuleList([TransformerBlock(atom_fea_len) for _ in range(n_layers)])  
 
@@ -216,11 +222,11 @@ class tModLodaer_t(nn.Module):
 
         atom_fea = atom_fea.squeeze()
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
+        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5)
+        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
+        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
 
         edge_ij = self.w_b(bonds)
 
@@ -238,7 +244,7 @@ class tModLodaer_t(nn.Module):
         for ii in range(len(masks)):
             masks[ii, :n_atoms[ii]] = 0.0
 
-        masks = masks.to(torch.bool).cuda() # bs, max_len
+        masks = masks.to(torch.bool).to(self.device) # bs, max_len
 
         for edge_func, conv, three, transformer, norm1, norm2 in zip(self.edge_updates, self.convs, self.three, self.transformers, self.norms1, self.norms2):
             edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
@@ -257,8 +263,8 @@ class tModLodaer_t(nn.Module):
             # atom_fea = torch.cat([transformer(torch.index_select(atom_fea, 0, idx_map)) for idx_map in crystal_atom_idx], dim=0) + atom_fea
             atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).cuda()
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).cuda(), n_atoms), atom_fea)
+        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
+        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))
@@ -269,12 +275,16 @@ class tModLodaer_t(nn.Module):
 
 
 class tModLodaer(nn.Module):
-    def __init__(self, atom_fea_len=64,
-                        nbr_fea_len=64,
-                        n_layers=4,
+    def __init__(self, CFG
                         ):
         
         super(tModLodaer, self).__init__()
+        
+        atom_fea_len = CFG.node_feature_len
+        nbr_fea_len = CFG.edge_feature_len
+        n_layers = CFG.n_layers
+
+        self.device = CFG.device
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -288,7 +298,7 @@ class tModLodaer(nn.Module):
                                     for _ in range(n_layers)])
         
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len) for _ in range(n_layers)])
+                                    nbr_fea_len=nbr_fea_len, device=self.device) for _ in range(n_layers)])
 
         self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len)
                                           for _ in range(n_layers))
@@ -312,11 +322,11 @@ class tModLodaer(nn.Module):
 
         atom_fea = atom_fea.squeeze()
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0) # M, 16
+        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5)
+        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
+        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
 
         edge_ij = self.w_b(bonds)
 
@@ -332,8 +342,8 @@ class tModLodaer(nn.Module):
             edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
             atom_fea = conv(atom_fea, edge_ij, bonds_dist, nbr_atoms)
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).cuda()
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).cuda(), n_atoms), atom_fea)
+        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
+        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))

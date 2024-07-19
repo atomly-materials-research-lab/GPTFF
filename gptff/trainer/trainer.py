@@ -56,6 +56,9 @@ class CFG:
     w2 = js['training']['weight_force']
     w3 = js['training']['weight_stress']
     transformer_activate = js['training']['transformer_activate']
+    node_feature_len = js['training']['node_feature_len']
+    edge_feature_len = js['training']['edge_feature_len']
+    n_layers = js['training']['n_layers']
     unit_trans = 160.21766208
 
 cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}
@@ -86,12 +89,12 @@ val_loader = DataLoader(val_dataset, batch_size=32,
 # build model
 
 if CFG.transformer_activate:
-    model = tModLodaer_t()
+    model = tModLodaer_t(CFG)
 else:
-    model = tModLodaer()
+    model = tModLodaer(CFG)
 
-if CFG.device == 'cuda':
-    model.cuda()
+# if CFG.device == 'cuda':
+model.to(CFG.device)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -153,7 +156,7 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
 
     for i, (data) in enumerate(train_loader):
 
-        data = [x.cuda() for x in data]
+        data = [x.to(CFG.device) for x in data]
 
         pbar_trn.update(1)
 
@@ -163,7 +166,7 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
         coords = coords.requires_grad_(True)
         strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
     
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strain)
+        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strain)
 
         try:
             volumes = torch.linalg.det(lattices)
@@ -171,9 +174,9 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
             continue
 
         strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strains).squeeze()
+        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
 
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).cuda(), pairs_count)]
+        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
         
         offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
 
@@ -271,14 +274,14 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
 
     for i, (data) in enumerate(val_loader):
 
-        data = [x.cuda() for x in data]
+        data = [x.to(CFG.device) for x in data]
         pbar_val.update(1)
 
         atom_fea, coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, target_energy, target_forces, target_stress, ref_energy = data
         coords = coords.requires_grad_(True)
         strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
 
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strain)
+        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strain)
 
         try:
             volumes = torch.linalg.det(lattices)
@@ -286,9 +289,9 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
             continue
         
         strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strains).squeeze()
+        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
 
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).cuda(), pairs_count)]
+        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
 
         with autocast():
             

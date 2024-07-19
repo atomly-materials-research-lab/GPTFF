@@ -25,6 +25,12 @@ from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
 
+
+class CFG:
+    def __init__(self, d):
+        for k, v in d.items():
+            setattr(self, k, v)
+
 atom_refs = np.array([ 0.00000000e+00, -3.46535853e+00, -7.56101906e-01, -3.46224791e+00,
        -4.77600176e+00, -8.03619240e+00, -8.40374071e+00, -7.76814618e+00,
        -7.38918302e+00, -4.94725878e+00, -2.92883670e-02, -2.47830716e+00,
@@ -157,11 +163,13 @@ class ASECalculator(Calculator):
 
         self.state = torch.load(model_path)
 
+        cfg = CFG(self.state['cfg'])
+        cfg.device = device
         if self.state['cfg']['transformer_activate']:
-            self.model = model.tModLodaer_t(n_layers=self.state['cfg']['n_layers'])
+            self.model = model.tModLodaer_t(cfg)
         else:
-            self.model = model.tModLodaer(n_layers=self.state['cfg']['n_layers'])
-
+            self.model = model.tModLodaer(cfg)
+        self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)
         self.graph = custom_graph()
@@ -173,13 +181,13 @@ class ASECalculator(Calculator):
         coords = coords.requires_grad_(True)
         strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
     
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strain)
+        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(self.device) + strain)
 
         volumes = torch.linalg.det(lattices)
         strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].cuda() + strains).squeeze()
+        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(self.device) + strains).squeeze()
 
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).cuda(), pairs_count)]
+        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(self.device), pairs_count)]
         offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
 
         vec_diff_ij = (
@@ -219,7 +227,7 @@ class ASECalculator(Calculator):
 
         data = self.graph.transform(atoms)
         data = collate_fn(data)
-        data = [x.cuda() for x in data]
+        data = [x.to(self.device) for x in data]
         ener, force, stress = self.get_efs(data)
 
         self.results.update(
