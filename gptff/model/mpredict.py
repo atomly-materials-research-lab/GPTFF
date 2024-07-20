@@ -161,7 +161,7 @@ class ASECalculator(Calculator):
     def __init__(self, model_path, device='cuda', **kwargs):
         super().__init__(**kwargs)
 
-        self.state = torch.load(model_path)
+        self.state = torch.load(model_path, map_location=torch.device(device))
 
         cfg = CFG(self.state['cfg'])
         cfg.device = device
