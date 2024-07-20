@@ -26,7 +26,8 @@ from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
 model_weight = "pretrained/gptff_v1.pth"
-p = ASECalculator(model_weight) # Initialize the model and load weights
+device = 'cuda' # or cpu
+p = ASECalculator(model_weight, device) # Initialize the model and load weights
 
 adp = AseAtomsAdaptor()
 struc = Structure.from_file('POSCAR_structure')
@@ -50,7 +51,9 @@ from ase.optimize.fire import FIRE
 from ase.constraints import ExpCellFilter, StrainFilter
 
 model_weight = "pretrained/gptff_v1.pth"
-p = ASECalculator(model_weight) # Initialize the model and load weights
+device = 'cuda' # or cpu
+p = ASECalculator(model_weight, device) # Initialize the model and load weights
+
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 
@@ -74,7 +77,9 @@ from ase.optimize.fire import FIRE
 from ase.optimize.bfgs import BFGS
 
 model_weight = "pretrained/gptff_v1.pth"
-p = ASECalculator(model_weight) # Initialize the model and load weights
+device = 'cuda' # or cpu
+p = ASECalculator(model_weight, device) # Initialize the model and load weights
+
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 
@@ -98,7 +103,9 @@ from ase.md.nvtberendsen import NVTBerendsen
 import os
 
 model_weight = "pretrained/gptff_v1.pth"
-p = ASECalculator(model_weight) # Initialize the model and load weights
+device = 'cuda' # or cpu
+p = ASECalculator(model_weight, device) # Initialize the model and load weights
+
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
 

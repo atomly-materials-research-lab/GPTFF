@@ -4,3 +4,5 @@ build*
 __pycache__
 *.sh
 main.py
+*.egg-info
+*.cpp
