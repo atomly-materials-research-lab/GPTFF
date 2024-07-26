@@ -196,3 +196,20 @@ atom_refs = np.array([
 ```
 
 Or you can fit you own `atom_refs`.
+
+## Training setting
+
+The file `config.json` includes training settings, 
+
+- workers: The number of workers for dataloader
+- epochs: The number of training epochs
+- batch_size: batch size for training, the number of structures used in one step(batch)
+- node_feature_len: The size of the node(atom) feature length
+- edge_feature_len: The size of the edge(bond) feature length
+- n_layers: THe number of layers of GPTFF model
+- device: `cpu` or `cuda`
+- val_fold: Label validation data during training
+- transformer_activate: If activate `transformer` block or not
+- weight_energy: Weight factor of the energy
+- weight_force: Weight factor of the forces
+- weight_stress: Weight factor of the stress, if there's not stress data, please set it to `0`
