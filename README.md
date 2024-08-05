@@ -11,7 +11,7 @@ conda create -n gptff python=3.8
 Then clone the `GPTFF` repo and install:
 
 ```bash
-git clone https://github.com/fkxie/GPTFF.git
+git clone https://github.com/atomly-materials-research-lab/GPTFF.git
 cd GPTFF
 pip install .
 ```
