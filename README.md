@@ -1,4 +1,4 @@
-Graph-based Pretrained Transformer Force Field xxx
+GPTFF (Graph-based Pretrained Transformer Force Field) can simulate arbitrary inorganic systems with good precision and generalizability.
 
 ## Installation
 
