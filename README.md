@@ -213,3 +213,26 @@ The file `config.json` includes training settings,
 - weight_energy: Weight factor of the energy
 - weight_force: Weight factor of the forces
 - weight_stress: Weight factor of the stress, if there's not stress data, please set it to `0`
+
+## Reference
+
+If you found GPTFF useful, please cite our article:
+
+```
+@ARTICLE{2024arXiv240219327X,
+       author = {{Xie}, Fankai and {Lu}, Tenglong and {Meng}, Sheng and {Liu}, Miao},
+        title = "{GPTFF: A high-accuracy out-of-the-box universal AI force field for arbitrary inorganic materials}",
+      journal = {arXiv e-prints},
+     keywords = {Condensed Matter - Materials Science},
+         year = 2024,
+        month = feb,
+          eid = {arXiv:2402.19327},
+        pages = {arXiv:2402.19327},
+          doi = {10.48550/arXiv.2402.19327},
+archivePrefix = {arXiv},
+       eprint = {2402.19327},
+ primaryClass = {cond-mat.mtrl-sci},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2024arXiv240219327X},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```

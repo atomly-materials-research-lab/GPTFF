@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gptff"
-version = "1.0.1(Kawagarbo)"
+version = "1.0.1"
 description = "Graph-based Pretrained Transformer Force Field."
-authors = [{ name = "Fankai Xie", email = "fankaixie@iphy.ac.cn" }]
+authors = [{ name = "Fankai Xie", email = "fankaixiee@gmail.com" }]
 requires-python = ">=3.8"
 
 dependencies = [
@@ -26,3 +26,6 @@ find = { include = ["gptff*"], exclude = ["test*"] }
 
 [project.scripts]
 gptff_trainer = "gptff.trainer.trainer:main"
+
+[project.urls]
+Homepage = "https://github.com/atomly-materials-research-lab/GPTFF"

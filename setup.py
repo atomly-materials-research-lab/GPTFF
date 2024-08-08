@@ -4,7 +4,6 @@ import numpy as np
 from setuptools import Extension, setup, find_packages
 
 setup(
-    # packages=find_packages(include=['gptff*'], exclude=['test*']),
     ext_modules=[
         Extension(
             name="gptff.utils_.compute_tp", 
