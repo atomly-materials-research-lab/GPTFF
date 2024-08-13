@@ -8,3 +8,4 @@ main.py
 *.egg*
 *.gz
 *.whl
+dist

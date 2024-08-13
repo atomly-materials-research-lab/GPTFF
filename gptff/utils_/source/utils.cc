@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <unordered_map>
 
 
 typedef struct Results {
@@ -105,12 +106,11 @@ Results_ptr *cal_tp(int *n_bond_pairs_atom, int *n_bond_pairs_bond, const int *n
 Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, const int *cell_shift, const int *pbc, const int *num_cell_xyz, const int *range_xyz, const int *cell_index_1d, const int *cell_index, const int cell_index_1d_max, const int n_atoms, const double cutoff){
 
     Results_ptr2 *results = new Results_ptr2;
-
-    std::vector<std::vector<int> > cell_rmap(cell_index_1d_max+1);
-    for (int ii=0; ii<n_atoms; ii++){
-        int idx = cell_index_1d[ii];
-        cell_rmap[idx].push_back(ii);
-    }
+    std::unordered_map<int, std::vector<int>> cell_rmap;
+        for (int ii=0; ii<n_atoms; ii++){
+            int idx = cell_index_1d[ii];
+            cell_rmap[idx].push_back(ii);
+         }
     
     std::vector<int> center_indices, neigh_indices, offset_list;
     std::vector<double> dist_list;
@@ -141,36 +141,41 @@ Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, con
                         }
 
                     int search_cell_idx = neigh_x + num_cell_xyz[0] * (neigh_y + num_cell_xyz[1] * neigh_z);
-                    for (int p=0; p < cell_rmap[search_cell_idx].size(); p++){
-                        int j_atom_idx = cell_rmap[search_cell_idx][p];
-                        int offset_xyz[3];
-
-                        offset_xyz[0] = shift_x + cell_shift[center_idx * 3 + 0] - cell_shift[j_atom_idx * 3 + 0];
-                        offset_xyz[1] = shift_y + cell_shift[center_idx * 3 + 1] - cell_shift[j_atom_idx * 3 + 1];
-                        offset_xyz[2] = shift_z + cell_shift[center_idx * 3 + 2] - cell_shift[j_atom_idx * 3 + 2];
-
-                        double dist_vec[3];
-
-                        for (int kk=0; kk<3; kk++){
-                            double tmp_val = 0;
-                            for (int kkk=0; kkk<3; kkk++){
-                                tmp_val += offset_xyz[kkk] * lattice[kkk*3 + kk];
-                            }
-                            dist_vec[kk] = coords[j_atom_idx * 3 + kk] - coords[center_idx * 3 + kk] + tmp_val;
+                    if (cell_rmap.find(search_cell_idx) == cell_rmap.end()){
+                            continue;
                         }
+                        else {
+                            for (int p=0; p < cell_rmap[search_cell_idx].size(); p++){
+                                int j_atom_idx = cell_rmap[search_cell_idx][p];
+                                int offset_xyz[3];
 
-                        double dist_r = std::sqrt(dist_vec[0] * dist_vec[0] + dist_vec[1] * dist_vec[1] + dist_vec[2] * dist_vec[2]);
-                    
-                        if ((dist_r <= cutoff) && (center_idx != j_atom_idx)){
-                            center_indices.push_back(center_idx);
-                            neigh_indices.push_back(j_atom_idx);
-                            dist_list.push_back(dist_r);
-                            for (int kk=0; kk<3; kk++){
-                                offset_list.push_back(offset_xyz[kk]);
+                                offset_xyz[0] = shift_x + cell_shift[center_idx * 3 + 0] - cell_shift[j_atom_idx * 3 + 0];
+                                offset_xyz[1] = shift_y + cell_shift[center_idx * 3 + 1] - cell_shift[j_atom_idx * 3 + 1];
+                                offset_xyz[2] = shift_z + cell_shift[center_idx * 3 + 2] - cell_shift[j_atom_idx * 3 + 2];
+
+                                double dist_vec[3];
+
+                                for (int kk=0; kk<3; kk++){
+                                    double tmp_val = 0;
+                                    for (int kkk=0; kkk<3; kkk++){
+                                        tmp_val += offset_xyz[kkk] * lattice[kkk*3 + kk];
+                                    }
+                                    dist_vec[kk] = coords[j_atom_idx * 3 + kk] - coords[center_idx * 3 + kk] + tmp_val;
+                                }
+
+                                double dist_r = std::sqrt(dist_vec[0] * dist_vec[0] + dist_vec[1] * dist_vec[1] + dist_vec[2] * dist_vec[2]);
+                            
+                                if ((dist_r <= cutoff) && (center_idx != j_atom_idx)){
+                                    center_indices.push_back(center_idx);
+                                    neigh_indices.push_back(j_atom_idx);
+                                    dist_list.push_back(dist_r);
+                                    for (int kk=0; kk<3; kk++){
+                                        offset_list.push_back(offset_xyz[kk]);
+                                    }
+                                }
+                                
                             }
                         }
-                        
-                    }
                 }
             }
         }

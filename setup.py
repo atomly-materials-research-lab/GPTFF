@@ -10,14 +10,14 @@ setup(
             sources=["gptff/utils_/compute_tp.pyx"], 
             include_dirs=[np.get_include()],
             language="c++",
-            extra_compile_args=["-std=c++11"],
+            extra_compile_args=["-std=c++11", "-g"],
         ),
         Extension(
             name="gptff.utils_.compute_nb", 
             sources=["gptff/utils_/compute_nb.pyx"], 
             include_dirs=[np.get_include()],
             language="c++",
-            extra_compile_args=["-std=c++11"],
+            extra_compile_args=["-std=c++11", "-g"],
         ),
     ],
     setup_requires=["Cython"]
