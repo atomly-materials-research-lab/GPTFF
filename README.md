@@ -5,7 +5,7 @@ GPTFF (Graph-based Pretrained Transformer Force Field) can simulate arbitrary in
 Using `conda` to create a new python virtual env(not necessary):
 
 ```bash
-conda create -n gptff python=3.8
+conda create -n gptff python=3.11
 ```
 
 Then clone the `GPTFF` repo and install:
