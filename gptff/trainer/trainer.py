@@ -79,7 +79,7 @@ train_loader = DataLoader(trn_dataset, batch_size=CFG.batch_size,
                               collate_fn=collate_fn,
                               pin_memory=True)
 
-val_loader = DataLoader(val_dataset, batch_size=32,
+val_loader = DataLoader(val_dataset, batch_size=CFG.batch_size,
                         shuffle=False,
                         num_workers=CFG.num_workers,
                         collate_fn=collate_fn,
