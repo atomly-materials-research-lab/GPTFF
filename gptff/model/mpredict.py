@@ -231,7 +231,7 @@ class ASECalculator(Calculator):
         ener, force, stress = self.get_efs(data)
 
         self.results.update(
-            energy=ener.detach().cpu().numpy().ravel(),
+            energy=ener.detach().cpu().numpy().ravel().item(),
             free_energy=ener.detach().cpu().numpy().ravel(),
             forces=force.detach().cpu().numpy(),
             stress=stress[0].detach().cpu().numpy() 
