@@ -1,0 +1,11 @@
+*.txt
+test*
+build*
+__pycache__
+*.sh
+main.py
+*.cpp
+*.egg*
+*.gz
+*.whl
+dist
