@@ -53,12 +53,8 @@ class Mydataset(Dataset):
         nbr_atoms = np.array([i, j], dtype=np.int32).T
 
         if len(nbr_atoms) == 0:
-<<<<<<< HEAD
-            n_bond_pairs_atoms = np.array([0] * len(struc), dtype=np.int32)
-=======
             # when there is no neighbor pair, keep consistent var names and shapes
             n_bond_pairs_atom = np.array([0] * len(struc), dtype=np.int32)
->>>>>>> main
             n_bond_pairs_bond = np.array([], dtype=np.int32)
             bond_pairs_indices = np.array([], dtype=np.int32).reshape(-1, 2)
         else:
