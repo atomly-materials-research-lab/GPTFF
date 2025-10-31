@@ -24,6 +24,20 @@ from pymatgen.core.composition import Composition
 from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
+import os, psutil, time, gc
+
+# lightweight, ASE-proof file logger (same idea as prior mem_log)
+def _mem_log_path():
+    # allow user to override via env; else write to current working dir
+    return os.environ.get("GPTFF_MEM_LOG", os.path.join(os.getcwd(), "mem_log.txt"))
+
+def _log_mem(tag: str):
+    try:
+        proc = psutil.Process(os.getpid())
+        with open(_mem_log_path(), "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} | {tag:20s} | RSS(MB)={proc.memory_info().rss/1024**2:.1f}\n")
+    except Exception:
+        pass
 
 
 class CFG:
@@ -240,6 +254,4 @@ class ASECalculator(Calculator):
             stress=stress[0].detach().cpu().numpy() 
         )
 
-        del data, ener, force, stress  #kk 添加
-        # 仅GPU且确有必要时再调用，避免频繁碎片化
-        #torch.cuda.empty_cache()
+        del data, ener, force, stress  

@@ -17,6 +17,7 @@ cdef extern from 'source/utils.cc':
         vector[int] offset_list;
 
     Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, const int *cell_shift, const int*pbc, const int *num_cell_xyz, const int *range_xyz, const int *cell_index_1d, const int *cell_index, const int cell_index_1d_max, const int n_atoms, const double cutoff);
+    void free_results2(Results_ptr2* p)
 
 cpdef find_neighbors(np.ndarray[double, ndim=2] coords, np.ndarray[double, ndim=2] lattice, cutoff, np.ndarray[int, ndim=1] pbc):
     if not coords.flags['C_CONTIGUOUS']:
@@ -83,6 +84,12 @@ cpdef find_neighbors(np.ndarray[double, ndim=2] coords, np.ndarray[double, ndim=
     cdef vector[int] o = res.offset_list
     cdef vector[double] d = res.dist_list 
 
-    # free(res)
+    # Convert to numpy (copies from vectors), then free C++ struct to avoid leaks
+    i_np = np.asarray(i_idx, dtype=np.int32)
+    j_np = np.asarray(j_idx, dtype=np.int32)
+    o_np = np.asarray(o, dtype=np.int32).reshape(-1, 3)
+    d_np = np.asarray(d, dtype=np.float64)
 
-    return np.asarray(i_idx).astype(np.int32), np.asarray(j_idx).astype(np.int32), np.asarray(o).astype(np.int32).reshape(-1, 3), np.asarray(d).astype(np.float64)
+    free_results2(res)
+
+    return i_np, j_np, o_np, d_np
