@@ -103,6 +103,23 @@ Results_ptr *cal_tp(int *n_bond_pairs_atom, int *n_bond_pairs_bond, const int *n
     return results;
 }   
 
+// ----kkk Added explicit free helpers for Cython wrappers ----
+extern "C" void free_results2(Results_ptr2* p) {
+    // Results_ptr2 only holds STL vectors which free themselves on delete
+    delete p;
+}
+
+extern "C" void free_results(Results_ptr* p) {
+    if (p) {
+        // Results_ptr owns a raw array allocated with new[]
+        if (p->bond_pairs) {
+            delete[] p->bond_pairs;
+            p->bond_pairs = nullptr;
+        }
+        delete p;
+    }
+}
+
 Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, const int *cell_shift, const int *pbc, const int *num_cell_xyz, const int *range_xyz, const int *cell_index_1d, const int *cell_index, const int cell_index_1d_max, const int n_atoms, const double cutoff){
 
     Results_ptr2 *results = new Results_ptr2;
