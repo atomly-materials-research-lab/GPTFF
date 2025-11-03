@@ -13,6 +13,7 @@ cdef extern from 'source/utils.cc':
         int *bond_pairs
 
     Results_ptr *cal_tp(int *n_bond_pairs_atom, int *n_bond_pairs_bond, const int *nbr_atoms, const int *idx_mapping, const int n_atoms, const size_t rows, const size_t cols)
+    void free_results(Results_ptr* p)
 
 
 np.import_array()
@@ -33,7 +34,7 @@ cpdef compute_tp_cc(np.ndarray[int, ndim=2] nbr_atoms, d_ij, tp_cut, n_atoms):
     cdef np.ndarray[int, ndim=1] n_bond_pairs_atom_arr = np.zeros(n_atoms).astype(np.int32)
     cdef np.ndarray[int, ndim=1] n_bond_pairs_bond_arr
     cdef np.ndarray[int, ndim=2] bond_pairs_indices 
-    cdef np.ndarray[int, ndim=1] bond_pairs 
+    cdef np.ndarray[np.int32_t, ndim=1] bond_pairs 
 
     cdef int* n_bond_pairs_atom 
     cdef int* n_bond_pairs_bond 
@@ -42,6 +43,8 @@ cpdef compute_tp_cc(np.ndarray[int, ndim=2] nbr_atoms, d_ij, tp_cut, n_atoms):
 
     cdef Results_ptr *c
     cdef int num_tps 
+    cdef int idx
+    cdef int* bp_ptr
     cdef np.npy_intp* dims
 
     if rows:
@@ -53,15 +56,15 @@ cpdef compute_tp_cc(np.ndarray[int, ndim=2] nbr_atoms, d_ij, tp_cut, n_atoms):
         c = cal_tp(n_bond_pairs_atom, n_bond_pairs_bond, filtered_nbr_atoms_ptr, idx_mapping_ptr, n_atoms, rows, cols)
         num_tps = c.num_tps 
 
-        dims = <np.npy_intp*>PyMem_Malloc(1 * sizeof(np.npy_intp))
-        dims[0] = num_tps * 2 # Cast length to npy_intp
-        bond_pairs = np.PyArray_SimpleNewFromData(
-            1, dims, np.NPY_INT32, <void*>c.bond_pairs)
+        # Allocate numpy array and copy from c->bond_pairs, then free C resources
+        bond_pairs = np.empty(num_tps * 2, dtype=np.int32)
+        bp_ptr = c.bond_pairs
+        for idx in range(num_tps * 2):
+            bond_pairs[idx] = bp_ptr[idx]
 
-        bond_pairs_indices =  bond_pairs.reshape(num_tps, 2)
+        bond_pairs_indices = bond_pairs.reshape(num_tps, 2)
 
-        free(c)
-        PyMem_Free(dims)
+        free_results(c)
 
     else:
         n_bond_pairs_bond_arr = np.array([0] * num_nbrs, dtype=np.int32)

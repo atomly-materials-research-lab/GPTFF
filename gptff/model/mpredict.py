@@ -24,6 +24,20 @@ from pymatgen.core.composition import Composition
 from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
+import os, psutil, time, gc
+
+# lightweight, ASE-proof file logger (same idea as prior mem_log)
+def _mem_log_path():
+    # allow user to override via env; else write to current working dir
+    return os.environ.get("GPTFF_MEM_LOG", os.path.join(os.getcwd(), "mem_log.txt"))
+
+def _log_mem(tag: str):
+    try:
+        proc = psutil.Process(os.getpid())
+        with open(_mem_log_path(), "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} | {tag:20s} | RSS(MB)={proc.memory_info().rss/1024**2:.1f}\n")
+    except Exception:
+        pass
 
 
 class CFG:
@@ -172,6 +186,9 @@ class ASECalculator(Calculator):
         self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)
+        # Ensure deterministic inference: disable dropout etc. by switching to eval mode
+        self.model.eval()
+        #print("eval")
         self.graph = custom_graph()
 
     def get_efs(self, data):
@@ -209,7 +226,7 @@ class ASECalculator(Calculator):
         ener_pred = self.model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
 
         ener_pred = ener_pred.squeeze() + ref_energy
-        force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=True, create_graph=True)
+        force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=False, create_graph=False) #kk 添加
         force_pred = -1.0 * force_pred
         stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
         return ener_pred, force_pred, stress_pred
@@ -236,3 +253,5 @@ class ASECalculator(Calculator):
             forces=force.detach().cpu().numpy(),
             stress=stress[0].detach().cpu().numpy() 
         )
+
+        del data, ener, force, stress  
