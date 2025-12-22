@@ -13,7 +13,6 @@ dependencies = [
     "ase>=3.22.1",
     "torch>=1.6",
     "pymatgen",
-    "pandas",
     "tqdm",
     "pandas",
     "scikit-learn",
