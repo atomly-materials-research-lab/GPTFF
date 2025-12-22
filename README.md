@@ -13,7 +13,7 @@ Then clone the `GPTFF` repo and install:
 ```bash
 git clone https://github.com/atomly-materials-research-lab/GPTFF.git
 cd GPTFF
-pip install .
+pip install -e .
 ```
 
 ## Usage
