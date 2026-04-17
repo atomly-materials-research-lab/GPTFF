@@ -345,7 +345,7 @@ class ASECalculator(Calculator):
 
         self.results.update(
             energy=ener.detach().cpu().numpy().ravel().item(),
-            free_energy=ener.detach().cpu().numpy().ravel(),
+            free_energy=ener.detach().cpu().numpy().ravel().item(),
             forces=force.detach().cpu().numpy(),
             stress=stress[0].detach().cpu().numpy() 
         )
