@@ -8,7 +8,7 @@ import ast
 import pandas as pd
 import json
 import torch
-from typing import Optional, Union
+from typing import Optional, Union, Sequence
 from ase.optimize.bfgs import BFGS
 from ase.optimize.bfgslinesearch import BFGSLineSearch
 from ase.optimize.fire import FIRE
@@ -24,6 +24,7 @@ from pymatgen.core.composition import Composition
 from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
+from gptff.utils_.data import collate_fn as training_collate_fn
 import os, psutil, time, gc
 
 # lightweight, ASE-proof file logger (same idea as prior mem_log)
@@ -230,6 +231,101 @@ class ASECalculator(Calculator):
         force_pred = -1.0 * force_pred
         stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
         return ener_pred, force_pred, stress_pred
+
+    def _forward_energy_only(self, data):
+        """
+        Forward pass for total energies only (no autograd for forces/stress).
+        """
+        atom_fea, coords, _d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, _e, _f, _s, ref_energy = data
+
+        eye = torch.eye(3, dtype=torch.float32, device=self.device)[None, :, :]
+        strain = torch.zeros_like(lattice, dtype=torch.float32)
+        lattices = torch.matmul(lattice, eye + strain)
+
+        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
+        coords = torch.matmul(coords.unsqueeze(1), eye + strains).squeeze(1)
+
+        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0], device=self.device), pairs_count)]
+        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
+
+        vec_diff_ij = coords[nbr_atoms[:, 1], :] + offset_dist - coords[nbr_atoms[:, 0], :]
+        pair_vec_ij = vec_diff_ij
+        pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
+        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
+        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
+        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
+        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
+        triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
+        triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
+        triple_a_jik = triple_a_jik.squeeze()
+
+        ener_pred = self.model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
+        ener_pred = ener_pred.squeeze() + ref_energy
+        return ener_pred
+
+    def _atoms_to_training_row(self, atoms: Atoms):
+        """
+        Build one training-style row for batched inference collate.
+        """
+        atom_fea, coords, d_ij, offset, lattices, nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, ref_energy = self.graph.transform(atoms)
+        n = coords.shape[0]
+        energy = 0.0
+        forces = np.zeros((n, 3), dtype=np.float64)
+        stress = np.zeros((3, 3), dtype=np.float64)
+        return (
+            atom_fea,
+            coords,
+            d_ij,
+            offset,
+            lattices,
+            nbr_atoms,
+            bond_pairs_indices,
+            n_bond_pairs_atom,
+            n_bond_pairs_bond,
+            n_bond_pairs_struc,
+            energy,
+            forces,
+            stress,
+            ref_energy,
+        )
+
+    def predict_energies_batched(
+        self,
+        atoms_list: Sequence[Atoms],
+        batch_size: int = 128,
+        show_progress: bool = False,
+    ) -> np.ndarray:
+        """
+        Predict total energies for a list of ASE Atoms efficiently.
+
+        Args:
+            atoms_list: sequence of ASE Atoms objects
+            batch_size: number of structures per forward batch
+            show_progress: whether to display a tqdm progress bar
+
+        Returns:
+            np.ndarray of shape (N,) with total energies in eV.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer.")
+        if len(atoms_list) == 0:
+            return np.array([], dtype=np.float64)
+
+        energies_all: list[float] = []
+        iterator = range(0, len(atoms_list), batch_size)
+        if show_progress:
+            iterator = tqdm(iterator, total=(len(atoms_list) + batch_size - 1) // batch_size, desc="GPTFF batch inference")
+
+        with torch.no_grad():
+            for start in iterator:
+                chunk = atoms_list[start : start + batch_size]
+                rows = [self._atoms_to_training_row(at) for at in chunk]
+                batch = training_collate_fn(rows)
+                batch = [x.to(self.device) for x in batch]
+                ener_pred = self._forward_energy_only(batch)
+                energies_all.extend(ener_pred.detach().cpu().numpy().ravel().tolist())
+
+        return np.asarray(energies_all, dtype=np.float64)
 
     def calculate(
         self,
