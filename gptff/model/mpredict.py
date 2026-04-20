@@ -235,8 +235,12 @@ class ASECalculator(Calculator):
     def _forward_energy_only(self, data):
         """
         Forward pass for total energies only (no autograd for forces/stress).
+
+        The 13-element `data` tuple here is produced by `training_collate_fn`
+        (gptff.utils_.data.collate_fn); the pairwise distances `d_ij` are NOT
+        passed through -- `pair_dist_ij` is recomputed from coords + offsets.
         """
-        atom_fea, coords, _d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, _e, _f, _s, ref_energy = data
+        atom_fea, coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, _e, _f, _s, ref_energy = data
 
         eye = torch.eye(3, dtype=torch.float32, device=self.device)[None, :, :]
         strain = torch.zeros_like(lattice, dtype=torch.float32)
