@@ -10,10 +10,11 @@ authors = [{ name = "Fankai Xie", email = "fankaixiee@gmail.com" }]
 requires-python = ">=3.8"
 
 dependencies = [
-    "ase>=3.22.1",
+    "ase==3.26.0",
     "torch>=1.6",
     "pymatgen",
-    "scikit-learn"
+    "scikit-learn",
+    "psutil"
 ]
 
 
