@@ -39,16 +39,43 @@ forces = atoms.get_forces() # unit (eV/Å)
 stress = atoms.get_stress() # unit (GPa)
 ```
 
+**Batched energy inference (high-throughput):**
+
+For many pre-generated structures, use the built-in batched API to improve throughput.
+
+```python
+from gptff.model.mpredict import ASECalculator
+from pymatgen.core import Structure
+from pymatgen.io.ase import AseAtomsAdaptor
+
+model_weight = "pretrained/gptff_v1.pth"
+device = "cuda"  # or "cpu"
+calc = ASECalculator(model_weight, device)
+
+adp = AseAtomsAdaptor()
+structure_files = ["POSCAR_1", "POSCAR_2", "POSCAR_3"]
+atoms_list = [adp.get_atoms(Structure.from_file(f)) for f in structure_files]
+
+# returns np.ndarray with shape (N,), unit eV
+energies = calc.predict_energies_batched(
+    atoms_list,
+    batch_size=128,
+    show_progress=True,
+)
+print(energies)
+```
+
 **Structure Optimization:**
 
-Lattice vectors would be changed
+Lattice vectors would be changed (example compatible with newer ASE versions):
 
 ```python
 from gptff.model.mpredict import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
-from ase.constraints import ExpCellFilter, StrainFilter
+from ase.filters import FrechetCellFilter
+import ase
 
 model_weight = "pretrained/gptff_v1.pth"
 device = 'cuda' # or cpu
@@ -59,11 +86,12 @@ struc = Structure.from_file('POSCAR_structure') # Read structure
 
 adp = AseAtomsAdaptor()
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
-optimizer = ExpCellFilter(atoms) 
+optimizer = FrechetCellFilter(atoms)
 
-FIRE(optimizer).run(fmax=0.01, steps=100)
+FIRE(optimizer).run(fmax=0.1, steps=1000)
+ase.io.write('POSCAR', atoms, 'vasp')
 
 ```
 
