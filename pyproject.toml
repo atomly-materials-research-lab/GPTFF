@@ -20,6 +20,9 @@ dependencies = [
     "tqdm"
 ]
 
+[project.optional-dependencies]
+torchsim = ["torch-sim-atomistic>=0.6"]
+
 
 [tool.setuptools.packages]
 find = { include = ["gptff*"], exclude = ["test*"] }
