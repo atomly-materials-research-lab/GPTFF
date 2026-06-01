@@ -1,4 +1,5 @@
 import argparse
+from contextlib import nullcontext
 import os
 import shutil
 import sys
@@ -22,7 +23,7 @@ from joblib import Parallel, delayed
 
 from gptff.utils_.data import Mydataset, collate_fn, CosineAnnealingWarmupRestarts
 from gptff.model.model import tModLodaer, tModLodaer_t
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from datetime import datetime
 import json
 import gc
@@ -137,8 +138,16 @@ def mae(prediction, target):
 
     return torch.mean(torch.abs(target - prediction))
 
+def amp_context():
+    if str(CFG.device).startswith('cuda'):
+        return autocast('cuda')
+    return nullcontext()
+
+def make_grad_scaler():
+    return GradScaler('cuda', enabled=str(CFG.device).startswith('cuda'))
+
 def train(train_loader, model, criterion, optimizer, pbar_trn):
-    scaler = GradScaler()
+    scaler = make_grad_scaler()
 
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -174,11 +183,11 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
             continue
 
         strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
+        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze(1)
 
         lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
         
-        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
+        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze(1)
 
         vec_diff_ij = (
                 coords[nbr_atoms[:, 1], :]
@@ -187,27 +196,26 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
             )
 
         pair_vec_ij = vec_diff_ij
-        pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
+        pair_dist_ij = torch.linalg.norm(pair_vec_ij, dim=1)
+        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]]
+        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]]
+        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]]
+        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]]
+        triple_a_jik = (triple_vec_ij * triple_vec_ik).sum(dim=1) / (triple_dist_ij * triple_dist_ik)
         triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
-        triple_a_jik = triple_a_jik.squeeze()
         
         # compute output
 
-        with autocast():
+        with amp_context():
 
             ener_pred = model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
-            ener_pred = ener_pred.squeeze() + ref_energy
+            ener_pred = ener_pred.view(-1) + ref_energy
             force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=True, create_graph=True)
             force_pred = -1.0 * force_pred
             stress_pred = 1. / volumes[:, None, None] * stress_pred * CFG.unit_trans
 
-            ener_pred = ener_pred.squeeze() / n_atoms
-            target_energy = target_energy.squeeze() / n_atoms
+            ener_pred = ener_pred.view(-1) / n_atoms
+            target_energy = target_energy.view(-1) / n_atoms
             
             e_loss = criterion(ener_pred, target_energy)
             f_loss = criterion(force_pred.view(-1), target_forces.view(-1))
@@ -289,13 +297,13 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
             continue
         
         strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
+        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze(1)
 
         lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
 
-        with autocast():
+        with amp_context():
             
-            offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
+            offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze(1)
             # offset_dist = torch.matmul(lattices, offsets[:, :, None]).squeeze()
 
             vec_diff_ij = (
@@ -305,26 +313,25 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
                 )
 
             pair_vec_ij = vec_diff_ij
-            pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-            triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-            triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-            triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-            triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-            triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
+            pair_dist_ij = torch.linalg.norm(pair_vec_ij, dim=1)
+            triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]]
+            triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]]
+            triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]]
+            triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]]
+            triple_a_jik = (triple_vec_ij * triple_vec_ik).sum(dim=1) / (triple_dist_ij * triple_dist_ik)
             triple_a_jik = torch.clamp(triple_a_jik, -1., 1.) * (1 - 1e-6)
-            triple_a_jik = triple_a_jik.squeeze()
             
 
             ener_pred = model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
             
-            ener_pred = ener_pred.squeeze() + ref_energy
+            ener_pred = ener_pred.view(-1) + ref_energy
 
             force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=True, create_graph=True)
             force_pred = -1.0 * force_pred
             stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
 
-            ener_pred = ener_pred.squeeze() / n_atoms
-            target_energy = target_energy.squeeze() / n_atoms
+            ener_pred = ener_pred.view(-1) / n_atoms
+            target_energy = target_energy.view(-1) / n_atoms
 
             e_loss = criterion(ener_pred.view(-1), target_energy.view(-1))
             f_loss = criterion(force_pred.view(-1), target_forces.view(-1))

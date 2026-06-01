@@ -1,31 +1,15 @@
 import numpy as np
-from ase import Atoms, units
+from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.core import Structure
 from gptff.model import model 
-import ast
-import pandas as pd
-import json
 import torch
-from typing import Optional, Union, Sequence
-from ase.optimize.bfgs import BFGS
-from ase.optimize.bfgslinesearch import BFGSLineSearch
-from ase.optimize.fire import FIRE
-from ase.optimize.lbfgs import LBFGS, LBFGSLineSearch
-from ase.optimize.mdmin import MDMin
-from ase.optimize.optimize import Optimizer
-from ase.optimize.sciopt import SciPyFminBFGS, SciPyFminCG
-from ase.constraints import ExpCellFilter, StrainFilter
-from ase.phonons import Phonons
+from typing import Optional, Sequence
 from tqdm import tqdm
-# import matplotlib.pyplot as plt
-from pymatgen.core.composition import Composition
-from scipy import interpolate
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
 from gptff.utils_.data import collate_fn as training_collate_fn
-import os, psutil, time, gc
+import os, psutil, time
 
 # lightweight, ASE-proof file logger (same idea as prior mem_log)
 def _mem_log_path():
@@ -45,6 +29,38 @@ class CFG:
     def __init__(self, d):
         for k, v in d.items():
             setattr(self, k, v)
+
+
+def _load_checkpoint(model_path, device):
+    try:
+        return torch.load(model_path, map_location=torch.device(device), weights_only=False)
+    except TypeError:
+        return torch.load(model_path, map_location=torch.device(device))
+
+
+def _pair_and_triple_features(coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, device, strain=None):
+    eye = torch.eye(3, dtype=torch.float32, device=device)[None, :, :]
+    if strain is None:
+        strain = torch.zeros_like(lattice, dtype=torch.float32)
+
+    lattices = torch.matmul(lattice, eye + strain)
+    strains = torch.repeat_interleave(strain, n_atoms, dim=0)
+    coords = torch.matmul(coords.unsqueeze(1), eye + strains).squeeze(1)
+
+    lattice_index = torch.repeat_interleave(torch.arange(pairs_count.shape[0], device=device), pairs_count)
+    pair_lattices = lattices[lattice_index]
+    offset_dist = torch.matmul(offsets[:, None, :], pair_lattices).squeeze(1)
+
+    pair_vec_ij = coords[nbr_atoms[:, 1], :] + offset_dist - coords[nbr_atoms[:, 0], :]
+    pair_dist_ij = torch.linalg.norm(pair_vec_ij, dim=1)
+
+    triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]]
+    triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]]
+    triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]]
+    triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]]
+    triple_a_jik = (triple_vec_ij * triple_vec_ik).sum(dim=1) / (triple_dist_ij * triple_dist_ik)
+    triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
+    return coords, lattices, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik
 
 atom_refs = np.array([ 0.00000000e+00, -3.46535853e+00, -7.56101906e-01, -3.46224791e+00,
        -4.77600176e+00, -8.03619240e+00, -8.40374071e+00, -7.76814618e+00,
@@ -89,7 +105,12 @@ class custom_graph(object):
         i, j, offsets, d_ij = find_neighbors(np.array(struc.cart_coords), np.array(struc.lattice.matrix), self.r_cut, np.array(self.pbc, dtype=np.int32))
         nbr_atoms = np.array([i, j], dtype=np.int32).T
         
-        n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(struc))
+        if len(nbr_atoms) == 0:
+            n_bond_pairs_atom = np.zeros(len(struc), dtype=np.int32)
+            n_bond_pairs_bond = np.array([], dtype=np.int32)
+            bond_pairs_indices = np.array([], dtype=np.int32).reshape(-1, 2)
+        else:
+            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(struc))
         
         n_bond_pairs_struc = np.array([np.sum(n_bond_pairs_atom)], dtype=np.int32)
 
@@ -176,7 +197,7 @@ class ASECalculator(Calculator):
     def __init__(self, model_path, device='cuda', **kwargs):
         super().__init__(**kwargs)
 
-        self.state = torch.load(model_path, map_location=torch.device(device))
+        self.state = _load_checkpoint(model_path, device)
 
         cfg = CFG(self.state['cfg'])
         cfg.device = device
@@ -187,9 +208,9 @@ class ASECalculator(Calculator):
         self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)
-        # Ensure deterministic inference: disable dropout etc. by switching to eval mode
+        for param in self.model.parameters():
+            param.requires_grad_(False)
         self.model.eval()
-        #print("eval")
         self.graph = custom_graph()
 
     def get_efs(self, data):
@@ -198,35 +219,14 @@ class ASECalculator(Calculator):
         
         coords = coords.requires_grad_(True)
         strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
-    
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(self.device) + strain)
-
+        _, lattices, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik = _pair_and_triple_features(
+            coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, self.device, strain
+        )
         volumes = torch.linalg.det(lattices)
-        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(self.device) + strains).squeeze()
-
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(self.device), pairs_count)]
-        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
-
-        vec_diff_ij = (
-                coords[nbr_atoms[:, 1], :]
-                + offset_dist
-                - coords[nbr_atoms[:, 0], :]
-            )
-
-        pair_vec_ij = vec_diff_ij
-        pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
-        triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
-        triple_a_jik = triple_a_jik.squeeze()
                 
         ener_pred = self.model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
 
-        ener_pred = ener_pred.squeeze() + ref_energy
+        ener_pred = ener_pred.view(-1) + ref_energy
         force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=False, create_graph=False) #kk 添加
         force_pred = -1.0 * force_pred
         stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
@@ -242,29 +242,12 @@ class ASECalculator(Calculator):
         """
         atom_fea, coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, _e, _f, _s, ref_energy = data
 
-        eye = torch.eye(3, dtype=torch.float32, device=self.device)[None, :, :]
-        strain = torch.zeros_like(lattice, dtype=torch.float32)
-        lattices = torch.matmul(lattice, eye + strain)
-
-        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), eye + strains).squeeze(1)
-
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0], device=self.device), pairs_count)]
-        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
-
-        vec_diff_ij = coords[nbr_atoms[:, 1], :] + offset_dist - coords[nbr_atoms[:, 0], :]
-        pair_vec_ij = vec_diff_ij
-        pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
-        triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
-        triple_a_jik = triple_a_jik.squeeze()
+        _, _, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik = _pair_and_triple_features(
+            coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, self.device
+        )
 
         ener_pred = self.model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
-        ener_pred = ener_pred.squeeze() + ref_energy
+        ener_pred = ener_pred.view(-1) + ref_energy
         return ener_pred
 
     def _atoms_to_training_row(self, atoms: Atoms):

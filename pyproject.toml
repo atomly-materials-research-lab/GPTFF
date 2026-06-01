@@ -7,14 +7,17 @@ name = "gptff"
 version = "1.0.1"
 description = "Graph-based Pretrained Transformer Force Field."
 authors = [{ name = "Fankai Xie", email = "fankaixiee@gmail.com" }]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 
 dependencies = [
-    "ase==3.26.0",
-    "torch>=1.6",
+    "ase>=3.26,<3.29",
+    "torch>=2.0",
+    "numpy",
+    "pandas",
     "pymatgen",
     "scikit-learn",
-    "psutil"
+    "psutil",
+    "tqdm"
 ]
 
 

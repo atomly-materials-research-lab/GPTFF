@@ -32,7 +32,7 @@ p = ASECalculator(model_weight, device) # Initialize the model and load weights
 adp = AseAtomsAdaptor()
 struc = Structure.from_file('POSCAR_structure')
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 energy = atoms.get_potential_energy() # unit (eV)
 forces = atoms.get_forces() # unit (eV/Å)
@@ -113,7 +113,7 @@ struc = Structure.from_file('POSCAR_structure') # Read structure
 
 adp = AseAtomsAdaptor()
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 optimizer = BFGS(atoms)
 optimizer.run(fmax=0.01, steps=1000)
@@ -139,7 +139,7 @@ struc = Structure.from_file('POSCAR_structure') # Read structure
 
 adp = AseAtomsAdaptor()
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 save_dir = './results_path'
 os.makedirs(save_dir, exist_ok=True)

@@ -220,7 +220,7 @@ class tModLodaer_t(nn.Module):
         n_bond_pairs_bond: [M]
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = atom_fea.view(-1)
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
         bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
         bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
@@ -320,7 +320,7 @@ class tModLodaer(nn.Module):
         n_bond_pairs_bond: [M]
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = atom_fea.view(-1)
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
         bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
         bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
