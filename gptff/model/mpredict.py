@@ -1,7 +1,6 @@
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
-from pymatgen.io.ase import AseAtomsAdaptor
 from gptff.model import model 
 import torch
 from typing import Optional, Sequence
@@ -39,13 +38,13 @@ def _load_checkpoint(model_path, device):
 
 
 def _pair_and_triple_features(coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, device, strain=None):
-    eye = torch.eye(3, dtype=torch.float32, device=device)[None, :, :]
     if strain is None:
-        strain = torch.zeros_like(lattice, dtype=torch.float32)
-
-    lattices = torch.matmul(lattice, eye + strain)
-    strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-    coords = torch.matmul(coords.unsqueeze(1), eye + strains).squeeze(1)
+        lattices = lattice
+    else:
+        eye = torch.eye(3, dtype=torch.float32, device=device)[None, :, :]
+        lattices = torch.matmul(lattice, eye + strain)
+        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
+        coords = torch.matmul(coords.unsqueeze(1), eye + strains).squeeze(1)
 
     lattice_index = torch.repeat_interleave(torch.arange(pairs_count.shape[0], device=device), pairs_count)
     pair_lattices = lattices[lattice_index]
@@ -97,29 +96,28 @@ class custom_graph(object):
         self.r_cut = r_cut
         self.a_cut = a_cut
         self.pbc = pbc
-        self.adp = AseAtomsAdaptor()
         self.atom_refs = atom_refs
         
     def transform(self, crystal):
-        struc = self.adp.get_structure(crystal)
-        i, j, offsets, d_ij = find_neighbors(np.array(struc.cart_coords), np.array(struc.lattice.matrix), self.r_cut, np.array(self.pbc, dtype=np.int32))
+        coords = np.asarray(crystal.get_positions(), dtype=np.float64)
+        lattice = np.asarray(crystal.cell.array, dtype=np.float64)
+        atom_fea = np.asarray(crystal.get_atomic_numbers(), dtype=np.int64).reshape(-1, 1)
+
+        i, j, offsets, d_ij = find_neighbors(coords, lattice, self.r_cut, np.array(self.pbc, dtype=np.int32))
         nbr_atoms = np.array([i, j], dtype=np.int32).T
         
         if len(nbr_atoms) == 0:
-            n_bond_pairs_atom = np.zeros(len(struc), dtype=np.int32)
+            n_bond_pairs_atom = np.zeros(len(crystal), dtype=np.int32)
             n_bond_pairs_bond = np.array([], dtype=np.int32)
             bond_pairs_indices = np.array([], dtype=np.int32).reshape(-1, 2)
         else:
-            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(struc))
+            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(crystal))
         
         n_bond_pairs_struc = np.array([np.sum(n_bond_pairs_atom)], dtype=np.int32)
-
-        atom_fea = np.vstack([struc[i].specie.number
-                              for i in range(len(struc))])
         
         ref_energy = np.sum(self.atom_refs[atom_fea])
         
-        return atom_fea, np.array(struc.cart_coords), d_ij, offsets, np.array(struc.lattice.matrix), nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, ref_energy
+        return atom_fea, coords, d_ij, offsets, lattice, nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, ref_energy
 
 def collate_fn(data):
     """
@@ -213,20 +211,84 @@ class ASECalculator(Calculator):
         self.model.eval()
         self.graph = custom_graph()
 
+    def _model_energy(self, atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices, ref_energy):
+        energy = self.model(
+            atom_fea,
+            pair_dist_ij,
+            n_atoms,
+            triple_dist_ij,
+            triple_dist_ik,
+            triple_a_jik,
+            nbr_atoms,
+            n_bond_pairs_bond,
+            bond_pairs_indices,
+        )
+        return energy.view(-1) + ref_energy
+
+    def get_energy(self, data):
+        atom_fea, coords, _d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, _n_bond_pairs_struc, _n_bond_pairs_atom, n_bond_pairs_bond, ref_energy = data
+
+        with torch.no_grad():
+            _, _, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik = _pair_and_triple_features(
+                coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, self.device
+            )
+            return self._model_energy(
+                atom_fea,
+                pair_dist_ij,
+                n_atoms,
+                triple_dist_ij,
+                triple_dist_ik,
+                triple_a_jik,
+                nbr_atoms,
+                n_bond_pairs_bond,
+                bond_pairs_indices,
+                ref_energy,
+            )
+
+    def get_ef(self, data):
+        atom_fea, coords, _d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, _n_bond_pairs_struc, _n_bond_pairs_atom, n_bond_pairs_bond, ref_energy = data
+
+        coords = coords.requires_grad_(True)
+        _, _, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik = _pair_and_triple_features(
+            coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, self.device
+        )
+        ener_pred = self._model_energy(
+            atom_fea,
+            pair_dist_ij,
+            n_atoms,
+            triple_dist_ij,
+            triple_dist_ik,
+            triple_a_jik,
+            nbr_atoms,
+            n_bond_pairs_bond,
+            bond_pairs_indices,
+            ref_energy,
+        )
+        force_pred = torch.autograd.grad(ener_pred, coords, torch.ones_like(ener_pred), retain_graph=False, create_graph=False)[0]
+        force_pred = -1.0 * force_pred
+        return ener_pred, force_pred
+
     def get_efs(self, data):
-        
-        atom_fea, coords, d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_struc, n_bond_pairs_atom, n_bond_pairs_bond, ref_energy = data
-        
+        atom_fea, coords, _d_ij, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, _n_bond_pairs_struc, _n_bond_pairs_atom, n_bond_pairs_bond, ref_energy = data
+
         coords = coords.requires_grad_(True)
         strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
         _, lattices, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik = _pair_and_triple_features(
             coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, self.device, strain
         )
         volumes = torch.linalg.det(lattices)
-                
-        ener_pred = self.model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
-
-        ener_pred = ener_pred.view(-1) + ref_energy
+        ener_pred = self._model_energy(
+            atom_fea,
+            pair_dist_ij,
+            n_atoms,
+            triple_dist_ij,
+            triple_dist_ik,
+            triple_a_jik,
+            nbr_atoms,
+            n_bond_pairs_bond,
+            bond_pairs_indices,
+            ref_energy,
+        )
         force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=False, create_graph=False) #kk 添加
         force_pred = -1.0 * force_pred
         stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
@@ -328,13 +390,27 @@ class ASECalculator(Calculator):
         data = self.graph.transform(atoms)
         data = collate_fn(data)
         data = [x.to(self.device) for x in data]
-        ener, force, stress = self.get_efs(data)
+
+        need_forces = "forces" in properties
+        need_stress = "stress" in properties
+
+        if need_stress:
+            ener, force, stress = self.get_efs(data)
+        elif need_forces:
+            ener, force = self.get_ef(data)
+            stress = None
+        else:
+            ener = self.get_energy(data)
+            force = None
+            stress = None
 
         self.results.update(
             energy=ener.detach().cpu().numpy().ravel().item(),
             free_energy=ener.detach().cpu().numpy().ravel().item(),
-            forces=force.detach().cpu().numpy(),
-            stress=stress[0].detach().cpu().numpy() 
         )
+        if force is not None:
+            self.results["forces"] = force.detach().cpu().numpy()
+        if stress is not None:
+            self.results["stress"] = stress[0].detach().cpu().numpy()
 
         del data, ener, force, stress  
