@@ -181,14 +181,14 @@ class GPTFFTorchSimModel(ModelInterface):
         mapping_system = mapping_system.to(device=self._device, dtype=torch.long)
         unit_shifts = unit_shifts.to(device=self._device, dtype=self._dtype)
 
-        # GPTFF's original Cython neighbor search excludes identical atom
-        # indices even when a periodic image is inside the cutoff.  TorchSim's
-        # self_interaction=False only removes the zero-distance self edge, so we
-        # filter periodic self images here to preserve pretrained-model inputs.
-        non_self = nbr_atoms[:, 0] != nbr_atoms[:, 1]
-        nbr_atoms = nbr_atoms[non_self]
-        mapping_system = mapping_system[non_self]
-        unit_shifts = unit_shifts[non_self]
+        # Match GPTFF's Cython neighbor search: exclude only the true zero-shift
+        # self edge, while retaining periodic images of the same atom.
+        zero_shift = (unit_shifts == 0).all(dim=1)
+        zero_self_edge = (nbr_atoms[:, 0] == nbr_atoms[:, 1]) & zero_shift
+        keep_edges = ~zero_self_edge
+        nbr_atoms = nbr_atoms[keep_edges]
+        mapping_system = mapping_system[keep_edges]
+        unit_shifts = unit_shifts[keep_edges]
 
         shifts = ts.transforms.compute_cell_shifts(cell, unit_shifts, mapping_system)
 

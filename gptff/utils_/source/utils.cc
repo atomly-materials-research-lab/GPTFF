@@ -101,7 +101,7 @@ Results_ptr *cal_tp(int *n_bond_pairs_atom, int *n_bond_pairs_bond, const int *n
     delete[] num_bonds_atom;
     results->num_tps = num_tps;
     return results;
-}   
+}
 
 // ----kkk Added explicit free helpers for Cython wrappers ----
 extern "C" void free_results2(Results_ptr2* p) {
@@ -182,7 +182,11 @@ Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, con
 
                                 double dist_r = std::sqrt(dist_vec[0] * dist_vec[0] + dist_vec[1] * dist_vec[1] + dist_vec[2] * dist_vec[2]);
                             
-                                if ((dist_r <= cutoff) && (center_idx != j_atom_idx)){
+                                bool zero_self_edge = (center_idx == j_atom_idx) &&
+                                                      (offset_xyz[0] == 0) &&
+                                                      (offset_xyz[1] == 0) &&
+                                                      (offset_xyz[2] == 0);
+                                if ((dist_r <= cutoff) && !zero_self_edge){
                                     center_indices.push_back(center_idx);
                                     neigh_indices.push_back(j_atom_idx);
                                     dist_list.push_back(dist_r);
@@ -206,4 +210,4 @@ Results_ptr2 *find_neighbors_cc(const double *coords, const double *lattice, con
     results->offset_list = offset_list;
 
     return results;
-}   
+}
