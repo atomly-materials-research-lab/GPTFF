@@ -32,6 +32,7 @@ NeighborListFn = Callable[
     [Tensor, Tensor, Tensor, Tensor, Tensor, bool],
     tuple[Tensor, Tensor, Tensor],
 ]
+EV_PER_ANG3_TO_GPA = 160.21766208
 
 
 def _sort_edges_by_center(
@@ -119,6 +120,11 @@ class GPTFFTorchSimModel(ModelInterface):
     format.  It replaces the ASE/Cython graph path with TorchSim's batched
     neighbor list, so a single SimState can contain one structure or a batch of
     structures/replicas.
+
+    Stress is computed by differentiating the energy with respect to an
+    affine strain tensor.  The default stress unit is eV/A^3, which matches
+    TorchSim pressure utilities; pass ``stress_unit="GPa"`` to match GPTFF's
+    ASE calculator output.
     """
 
     def __init__(
@@ -132,10 +138,12 @@ class GPTFFTorchSimModel(ModelInterface):
         r_cut: float = 5.0,
         a_cut: float = 3.5,
         reference_energies: np.ndarray = atom_refs,
+        stress_unit: str = "ev_per_ang3",
     ) -> None:
         super().__init__()
-        if compute_stress:
-            raise NotImplementedError("GPTFFTorchSimModel currently supports energy and forces, but not stress.")
+        stress_unit_normalized = stress_unit.lower()
+        if stress_unit_normalized not in {"ev_per_ang3", "gpa"}:
+            raise ValueError("stress_unit must be 'ev_per_ang3' or 'GPa'.")
 
         self._device = torch.device(device)
         self._dtype = dtype
@@ -145,6 +153,7 @@ class GPTFFTorchSimModel(ModelInterface):
         self.r_cut = float(r_cut)
         self.a_cut = float(a_cut)
         self.neighbor_list_fn = neighbor_list_fn
+        self.stress_unit = stress_unit_normalized
 
         state = _load_checkpoint(model_path, self._device)
         cfg = CFG(state["cfg"])
@@ -162,7 +171,12 @@ class GPTFFTorchSimModel(ModelInterface):
         refs = torch.as_tensor(reference_energies, dtype=self._dtype, device=self._device)
         self.register_buffer("atom_refs", refs, persistent=False)
 
-    def _build_gptff_inputs(self, state: ts.SimState, positions: Tensor) -> tuple[Tensor, ...]:
+    def _build_gptff_inputs(
+        self,
+        state: ts.SimState,
+        positions: Tensor,
+        strain: Tensor | None = None,
+    ) -> tuple[Tensor, ...]:
         system_idx = state.system_idx.to(device=self._device, dtype=torch.long)
         atomic_numbers = state.atomic_numbers.to(device=self._device, dtype=torch.long).view(-1)
         cell = state.row_vector_cell.to(device=self._device, dtype=self._dtype)
@@ -190,9 +204,18 @@ class GPTFFTorchSimModel(ModelInterface):
         mapping_system = mapping_system[keep_edges]
         unit_shifts = unit_shifts[keep_edges]
 
-        shifts = ts.transforms.compute_cell_shifts(cell, unit_shifts, mapping_system)
+        if strain is None:
+            feature_cell = cell
+            feature_positions = positions
+        else:
+            eye = torch.eye(3, dtype=self._dtype, device=self._device)[None, :, :]
+            feature_cell = torch.matmul(cell, eye + strain)
+            atom_strain = strain.index_select(0, system_idx)
+            feature_positions = torch.matmul(positions.unsqueeze(1), eye + atom_strain).squeeze(1)
 
-        pair_vec = positions[nbr_atoms[:, 1]] + shifts - positions[nbr_atoms[:, 0]]
+        shifts = ts.transforms.compute_cell_shifts(feature_cell, unit_shifts, mapping_system)
+
+        pair_vec = feature_positions[nbr_atoms[:, 1]] + shifts - feature_positions[nbr_atoms[:, 0]]
         pair_dist = torch.linalg.norm(pair_vec, dim=1)
         nbr_atoms, pair_vec, pair_dist, mapping_system = _sort_edges_by_center(
             nbr_atoms, pair_vec, pair_dist, mapping_system
@@ -223,12 +246,17 @@ class GPTFFTorchSimModel(ModelInterface):
             n_bond_pairs_bond,
             bond_pairs_indices,
             ref_energy,
+            feature_cell,
         )
 
     def forward(self, state: ts.SimState, **kwargs) -> dict[str, Tensor]:
         del kwargs
         positions = state.positions.to(device=self._device, dtype=self._dtype).detach().clone()
         positions.requires_grad_(self._compute_forces)
+        strain = None
+        if self._compute_stress:
+            row_cell = state.row_vector_cell.to(device=self._device, dtype=self._dtype)
+            strain = torch.zeros_like(row_cell, requires_grad=True)
 
         (
             atom_fea,
@@ -241,7 +269,8 @@ class GPTFFTorchSimModel(ModelInterface):
             n_bond_pairs_bond,
             bond_pairs_indices,
             ref_energy,
-        ) = self._build_gptff_inputs(state, positions)
+            feature_cell,
+        ) = self._build_gptff_inputs(state, positions, strain=strain)
 
         energy = self.gptff_model(
             atom_fea,
@@ -256,16 +285,37 @@ class GPTFFTorchSimModel(ModelInterface):
         ).view(-1) + ref_energy
 
         results: dict[str, Tensor] = {"energy": energy.detach()}
+        grad_targets: list[Tensor] = []
         if self._compute_forces:
-            forces = -torch.autograd.grad(
+            grad_targets.append(positions)
+        if self._compute_stress:
+            if strain is None:
+                raise RuntimeError("Internal error: stress requested without a strain tensor.")
+            grad_targets.append(strain)
+        if grad_targets:
+            grads = torch.autograd.grad(
                 energy,
-                positions,
+                grad_targets,
                 grad_outputs=torch.ones_like(energy),
                 retain_graph=False,
                 create_graph=False,
-            )[0]
+            )
+        else:
+            grads = ()
+
+        grad_idx = 0
+        if self._compute_forces:
+            forces = -grads[grad_idx]
+            grad_idx += 1
             results["forces"] = forces.detach()
+        if self._compute_stress:
+            stress = grads[grad_idx]
+            volumes = torch.linalg.det(feature_cell)
+            stress = stress / volumes[:, None, None]
+            if self.stress_unit == "gpa":
+                stress = stress * EV_PER_ANG3_TO_GPA
+            results["stress"] = stress.detach()
         return results
 
 
-__all__ = ["GPTFFTorchSimModel"]
+__all__ = ["GPTFFTorchSimModel", "EV_PER_ANG3_TO_GPA"]
