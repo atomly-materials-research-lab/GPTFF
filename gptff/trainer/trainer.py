@@ -422,3 +422,7 @@ def main():
 
         if is_best:
             shutil.copyfile('curr_checkpoint.pth', 'best_checkpoint.pth')
+
+
+if __name__ == "__main__":
+    main()

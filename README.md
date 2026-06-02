@@ -157,6 +157,34 @@ dyn.run(100000)
 
 ```
 
+**TorchSim interface (optional):**
+
+Install the optional TorchSim dependency with `pip install -e ".[torchsim]"`.
+The TorchSim model uses GPTFF V1/V2 checkpoints directly and can be used with
+TorchSim states and integrators.
+
+```python
+import torch
+import torch_sim as ts
+from ase.io import read
+from gptff.model.torchsim import GPTFFTorchSimModel
+
+model_weight = "pretrained/gptff_v1.pth"
+model = GPTFFTorchSimModel(model_weight,
+                           device="cuda",
+                           dtype=torch.float32,
+                           compute_forces=True,
+                           compute_stress=True)
+
+atoms = read("POSCAR_structure")
+state = ts.initialize_state(atoms, model.device, model.dtype)
+results = model(state)
+
+energy = results["energy"]   # unit (eV)
+forces = results["forces"]   # unit (eV/Å)
+stress = results["stress"]   # unit (eV/Å^3); use stress_unit="GPa" to match ASE
+```
+
 ## Model training
 
 `config.json` would be training parameters, you could specify data path in this file.

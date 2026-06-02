@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_sequence
@@ -12,6 +14,21 @@ def _padding_mask(n_atoms):
     max_len = int(n_atoms.max().item())
     positions = torch.arange(max_len, device=n_atoms.device)
     return positions.unsqueeze(0) >= n_atoms.unsqueeze(1)
+
+
+def _cuda_math_sdp_context():
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        return sdpa_kernel([SDPBackend.MATH])
+    except (ImportError, AttributeError):
+        if torch.cuda.is_available():
+            return torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_math=True,
+                enable_mem_efficient=False,
+            )
+        return nullcontext()
 
 
 def _three_body_indices(nbr_atoms, bond_pairs_indices, n_bond_pairs_bond):
@@ -212,7 +229,11 @@ class TransformerBlock(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
 
     def forward(self, atom_fea, masks):
-        out = self.encoder(atom_fea, src_key_padding_mask=masks)
+        if self.training and atom_fea.is_cuda:
+            with _cuda_math_sdp_context():
+                out = self.encoder(atom_fea, src_key_padding_mask=masks)
+        else:
+            out = self.encoder(atom_fea, src_key_padding_mask=masks)
         return out
 
 class tModLodaer_t(_RuntimeModelBase):
