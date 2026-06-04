@@ -159,7 +159,6 @@ dyn.run(100000)
 
 **TorchSim interface (optional):**
 
-Install the optional TorchSim dependency with `pip install -e ".[torchsim]"`.
 The TorchSim model uses GPTFF V1/V2 checkpoints directly and can be used with
 TorchSim states and integrators.
 
