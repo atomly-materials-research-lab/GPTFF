@@ -10,15 +10,63 @@ import ast
 import numpy as np
 import torch
 from pymatgen.core.structure import Structure
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data.dataloader import default_collate
-from torch.utils.data.sampler import SubsetRandomSampler
+from pymatgen.core.periodic_table import Element
+from torch.utils.data import Dataset
 import pandas as pd
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau,_LRScheduler
 import math
+
+
+@functools.lru_cache(maxsize=None)
+def _atomic_number(symbol):
+    return int(Element(symbol).Z)
+
+
+def _literal(value):
+    if isinstance(value, str):
+        return ast.literal_eval(value)
+    return value
+
+
+def _array_literal(value, dtype=np.float32):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = ast.literal_eval(value)
+    return np.asarray(value, dtype=dtype)
+
+
+def _site_symbol(site):
+    species = site.get("species")
+    if isinstance(species, list) and len(species) == 1:
+        specie = species[0]
+        if isinstance(specie, dict):
+            return specie.get("element") or specie.get("label")
+    if isinstance(species, dict):
+        return species.get("element") or species.get("label")
+    return site.get("label")
+
+
+def structure_arrays(structure_value):
+    structure_dict = _literal(structure_value)
+    try:
+        sites = structure_dict["sites"]
+        coords = np.asarray([site["xyz"] for site in sites], dtype=np.float64)
+        lattice = np.asarray(structure_dict["lattice"]["matrix"], dtype=np.float64)
+        symbols = [_site_symbol(site) for site in sites]
+        if any(symbol is None for symbol in symbols):
+            raise KeyError("missing site element")
+        atom_fea = np.asarray([[_atomic_number(symbol)] for symbol in symbols], dtype=np.int64)
+        return atom_fea, coords, lattice
+    except Exception:
+        structure = Structure.from_dict(structure_dict)
+        atom_fea = np.asarray([[site.specie.number] for site in structure], dtype=np.int64)
+        return atom_fea, np.asarray(structure.cart_coords, dtype=np.float64), np.asarray(structure.lattice.matrix, dtype=np.float64)
+
 
 class Mydataset(Dataset):
     def __init__(self, df, pbc=[1, 1, 1], r_cut=5.0, a_cut=3.5):
@@ -27,46 +75,47 @@ class Mydataset(Dataset):
         a_cut: cutoff for angles
         """
 
-        self.df = df
+        self.df = df.reset_index(drop=True)
         self.r_cut = r_cut
         self.a_cut = a_cut
-        self.pbc = pbc
+        self.pbc = np.asarray(pbc, dtype=np.int32)
+        self.structures = self.df["structure"].tolist()
+        self.energies = self.df["energy"].to_numpy(dtype=np.float32)
+        self.forces = self.df["forces"].tolist()
+        self.stresses = self.df["stress"].tolist()
+        self.ref_energies = self.df["ref_energy"].to_numpy(dtype=np.float32)
 
     def __len__(self):
-        return len(self.df)
+        return len(self.structures)
 
     @functools.lru_cache(maxsize=None)  # Cache loaded structures
     def __getitem__(self, idx):
         try:
-            struc = Structure.from_dict(ast.literal_eval(self.df['structure'][idx]))
-
-            energy = self.df['energy'][idx]
-            forces = np.array(ast.literal_eval(self.df['forces'][idx]))
-            stress = np.array(ast.literal_eval(self.df['stress'][idx])) * -0.1
-            ref_energy = np.array(self.df['ref_energy'][idx])
+            atom_fea, coords, lattice = structure_arrays(self.structures[idx])
+            energy = self.energies[idx]
+            forces = _array_literal(self.forces[idx], dtype=np.float32)
+            stress = _array_literal(self.stresses[idx], dtype=np.float32) * -0.1
+            ref_energy = self.ref_energies[idx]
 
         except Exception:
             idx = random.randint(0, len(self) - 1)
             return self.__getitem__(idx)
         
-        i, j, offset, d_ij = find_neighbors(np.array(struc.cart_coords), np.array(struc.lattice.matrix), self.r_cut, np.array(self.pbc, dtype=np.int32))
+        i, j, offset, d_ij = find_neighbors(coords, lattice, self.r_cut, self.pbc)
         nbr_atoms = np.array([i, j], dtype=np.int32).T
 
         if len(nbr_atoms) == 0:
             # when there is no neighbor pair, keep consistent var names and shapes
-            n_bond_pairs_atom = np.array([0] * len(struc), dtype=np.int32)
+            n_bond_pairs_atom = np.zeros(coords.shape[0], dtype=np.int32)
             n_bond_pairs_bond = np.array([], dtype=np.int32)
             bond_pairs_indices = np.array([], dtype=np.int32).reshape(-1, 2)
         else:
-            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(struc))
+            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, coords.shape[0])
         
 
         n_bond_pairs_struc = np.array([np.sum(n_bond_pairs_atom)], dtype=np.int32)
-
-        atom_fea = np.vstack([struc[i].specie.number
-                              for i in range(len(struc))])
         
-        return atom_fea, np.array(struc.cart_coords), d_ij, offset, np.array(struc.lattice.matrix), nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, energy, forces, stress, ref_energy 
+        return atom_fea, coords, d_ij, offset, lattice, nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, energy, forces, stress, ref_energy
     
 
 def collate_fn(data):

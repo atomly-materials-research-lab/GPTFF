@@ -20,5 +20,4 @@ setup(
             extra_compile_args=["-std=c++11", "-g"],
         ),
     ],
-    setup_requires=["Cython"]
 )

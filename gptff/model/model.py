@@ -1,7 +1,64 @@
+from contextlib import nullcontext
+
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
+
+
+def _batch_index(n_atoms):
+    return torch.repeat_interleave(torch.arange(n_atoms.shape[0], device=n_atoms.device), n_atoms)
+
+
+def _padding_mask(n_atoms):
+    max_len = int(n_atoms.max().item())
+    positions = torch.arange(max_len, device=n_atoms.device)
+    return positions.unsqueeze(0) >= n_atoms.unsqueeze(1)
+
+
+def _cuda_math_sdp_context():
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        return sdpa_kernel([SDPBackend.MATH])
+    except (ImportError, AttributeError):
+        if torch.cuda.is_available():
+            return torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_math=True,
+                enable_mem_efficient=False,
+            )
+        return nullcontext()
+
+
+def _three_body_indices(nbr_atoms, bond_pairs_indices, n_bond_pairs_bond):
+    nbr_i = nbr_atoms[:, 0]
+    nbr_j = nbr_atoms[:, 1]
+    pair_j = bond_pairs_indices[:, 0]
+    pair_k = bond_pairs_indices[:, 1]
+    bond_pair_target = torch.repeat_interleave(
+        torch.arange(n_bond_pairs_bond.shape[0], device=n_bond_pairs_bond.device),
+        n_bond_pairs_bond,
+    )
+    return nbr_i, nbr_j, nbr_i.index_select(0, pair_k), nbr_j.index_select(0, pair_j), nbr_j.index_select(0, pair_k), bond_pair_target
+
+
+def ebf(d_ij, rcut, device=None, filters=None):
+    if filters is None:
+        filter_device = d_ij.device if device is None else device
+        filters = torch.arange(16, device=filter_device, dtype=d_ij.dtype)
+    else:
+        filters = filters.to(device=d_ij.device, dtype=d_ij.dtype)
+    scale = (2.0 / float(rcut)) ** 0.5
+    return scale * torch.sin(filters * (torch.pi / float(rcut)) * d_ij) / d_ij
+
+
+class _RuntimeModelBase(nn.Module):
+    def _init_runtime_buffers(self):
+        self.register_buffer("ebf_filters", torch.arange(16, dtype=torch.float32), persistent=False)
+
+    def _radial_basis(self, distances, rcut):
+        return ebf(distances, rcut, filters=self.ebf_filters)
 
 
 class ThreeBody(nn.Module):
@@ -22,7 +79,7 @@ class ThreeBody(nn.Module):
         self.W_1 = nn.Linear(nbr_fea_len, nbr_fea_len)
         self.W_2 = nn.Linear(nbr_fea_len, nbr_fea_len)
 
-    def forward(self, atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond):
+    def forward(self, atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, three_body_indices=None):
         """
         atom_fea: [N, atom_fea_len]
         edge_ij: [M, nbr_fea_len]
@@ -33,9 +90,12 @@ class ThreeBody(nn.Module):
         n_bond_pairs_bond: [M]
         """
 
-        triple_i_indices = nbr_atoms[:, 0][bond_pairs_indices[:, 1]]
-        triple_j_indices = nbr_atoms[:, 1][bond_pairs_indices[:, 0]]
-        triple_k_indices = nbr_atoms[:, 1][bond_pairs_indices[:, 1]]
+        if three_body_indices is None:
+            _, _, triple_i_indices, triple_j_indices, triple_k_indices, bond_pair_target = _three_body_indices(
+                nbr_atoms, bond_pairs_indices, n_bond_pairs_bond
+            )
+        else:
+            _, _, triple_i_indices, triple_j_indices, triple_k_indices, bond_pair_target = three_body_indices
         atom_fea_ik = torch.cat([atom_fea[triple_i_indices],
                              atom_fea[triple_j_indices],
                              atom_fea[triple_k_indices],
@@ -51,7 +111,7 @@ class ThreeBody(nn.Module):
         # mat = angles_mat * bonds_mat * atom_fea_ik
 
         # atom_nbr_fea_ik = self.sig(mat)  # N, M, M-1, atom_fea
-        edge_ij = torch.index_add(edge_ij, 0, torch.repeat_interleave(torch.arange(n_bond_pairs_bond.shape[0]).to(self.device), n_bond_pairs_bond), atom_fea_ik)
+        edge_ij = torch.index_add(edge_ij, 0, bond_pair_target, atom_fea_ik)
         return edge_ij
 
 class EdgeUpdate(nn.Module):
@@ -66,9 +126,13 @@ class EdgeUpdate(nn.Module):
         self.W_r = nn.Linear(16, nbr_fea_len)
         self.W_3 = nn.Linear(nbr_fea_len, nbr_fea_len)
 
-    def forward(self, atom_fea, edge_ij, nbr_atoms, bonds_r):
-        atom_nbr_fea = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                                  atom_fea[nbr_atoms[:, 1]],
+    def forward(self, atom_fea, edge_ij, nbr_atoms, bonds_r, nbr_i=None, nbr_j=None):
+        if nbr_i is None:
+            nbr_i = nbr_atoms[:, 0]
+        if nbr_j is None:
+            nbr_j = nbr_atoms[:, 1]
+        atom_nbr_fea = torch.cat([atom_fea[nbr_i],
+                                  atom_fea[nbr_j],
                                   edge_ij], dim=-1)
         
         edge_ij = self.swish(self.W_1(atom_nbr_fea)) * self.sig(self.W_2(atom_nbr_fea))
@@ -92,22 +156,21 @@ class ConvLayer(nn.Module):
         self.W_1 = nn.Linear(2 * atom_fea_len, atom_fea_len)
         self.W_2 = nn.Linear(2 * atom_fea_len, atom_fea_len)
 
-    def forward(self, atom_fea, edge_ij, bonds_r, nbr_atoms):
-        atom_nbr_fea = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                                  atom_fea[nbr_atoms[:, 1]],
+    def forward(self, atom_fea, edge_ij, bonds_r, nbr_atoms, nbr_i=None, nbr_j=None):
+        if nbr_i is None:
+            nbr_i = nbr_atoms[:, 0]
+        if nbr_j is None:
+            nbr_j = nbr_atoms[:, 1]
+        atom_nbr_fea = torch.cat([atom_fea[nbr_i],
+                                  atom_fea[nbr_j],
                                   edge_ij], dim=-1)
         atom_gated_fea = self.swish(self.fc_full(atom_nbr_fea))
 
         nbr_all = self.swish(self.W_1(atom_gated_fea)) * self.sig(self.W_2(atom_gated_fea))
         nbr_all = nbr_all * self.W_r(bonds_r)
-        atom_fea = torch.index_add(atom_fea, 0, nbr_atoms[:, 0], nbr_all.float())
+        atom_fea = torch.index_add(atom_fea, 0, nbr_i, nbr_all.float())
 
         return atom_fea
-
-def ebf(d_ij, rcut, device):
-    radius = rcut
-    filters = torch.arange(0, 16, 1).to(device)
-    return torch.sqrt(torch.tensor(2.) / radius) * torch.sin(filters * torch.pi / radius * d_ij) / d_ij
 
 class Attention(nn.Module):
     def __init__(self, d_model, heads=8, dim_head=64):
@@ -166,14 +229,19 @@ class TransformerBlock(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
 
     def forward(self, atom_fea, masks):
-        out = self.encoder(atom_fea, src_key_padding_mask=masks)
+        if self.training and atom_fea.is_cuda:
+            with _cuda_math_sdp_context():
+                out = self.encoder(atom_fea, src_key_padding_mask=masks)
+        else:
+            out = self.encoder(atom_fea, src_key_padding_mask=masks)
         return out
 
-class tModLodaer_t(nn.Module):
+class tModLodaer_t(_RuntimeModelBase):
     def __init__(self, CFG
                         ):
         
         super(tModLodaer_t, self).__init__()
+        self._init_runtime_buffers()
 
         atom_fea_len = CFG.node_feature_len
         nbr_fea_len = CFG.edge_feature_len
@@ -220,51 +288,51 @@ class tModLodaer_t(nn.Module):
         n_bond_pairs_bond: [M]
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = atom_fea.view(-1)
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds_dist = self._radial_basis(bonds_r.unsqueeze(-1), 5.0) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
+        triple_dist_ij = self._radial_basis(triple_dist_ij.unsqueeze(-1), 3.5)
+        triple_dist_ik = self._radial_basis(triple_dist_ik.unsqueeze(-1), 3.5)
 
-        edge_ij = self.w_b(bonds)
+        three_body_indices = _three_body_indices(nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
+        nbr_i, nbr_j = three_body_indices[:2]
+        atom_batch_index = _batch_index(n_atoms)
 
-        edge_ij = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                          atom_fea[nbr_atoms[:, 1]],
+        edge_ij = self.w_b(bonds_dist)
+
+        edge_ij = torch.cat([atom_fea[nbr_i],
+                          atom_fea[nbr_j],
                           edge_ij
                           ], dim=-1)
 
         edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
         
-        max_len = torch.max(n_atoms)
-        # print(max_len)
-        masks = torch.ones(len(n_atoms), max_len)
-
-        for ii in range(len(masks)):
-            masks[ii, :n_atoms[ii]] = 0.0
-
-        masks = masks.to(torch.bool).to(self.device) # bs, max_len
+        masks = _padding_mask(n_atoms)
+        n_atoms_list = [int(n_atom) for n_atom in n_atoms.detach().cpu().tolist()]
 
         for edge_func, conv, three, transformer, norm1, norm2 in zip(self.edge_updates, self.convs, self.three, self.transformers, self.norms1, self.norms2):
-            edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
-            atom_fea = norm1(conv(atom_fea, edge_ij, bonds_dist, nbr_atoms))
+            edge_ij = three(
+                atom_fea,
+                edge_ij,
+                triple_dist_ij,
+                triple_dist_ik,
+                triple_a_jik,
+                nbr_atoms,
+                bond_pairs_indices,
+                n_bond_pairs_bond,
+                three_body_indices=three_body_indices,
+            )
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist, nbr_i=nbr_i, nbr_j=nbr_j)
+            atom_fea = norm1(conv(atom_fea, edge_ij, bonds_dist, nbr_atoms, nbr_i=nbr_i, nbr_j=nbr_j))
 
-            atom_fea_list = []
-
-            c_atom = 0
-            for n_atom in n_atoms:
-                atom_fea_list.append(atom_fea[c_atom:c_atom+n_atom])
-                c_atom += n_atom
-
-            atom_fea_list = pad_sequence(atom_fea_list, batch_first=True) # bs, seq_len, fea_len
+            atom_fea_list = pad_sequence(torch.split(atom_fea, n_atoms_list), batch_first=True) # bs, seq_len, fea_len
 
             # atom_fea = torch.cat([transformer(torch.index_select(atom_fea, 0, idx_map)) for idx_map in crystal_atom_idx], dim=0) + atom_fea
-            atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
+            atom_fea = norm2(transformer(atom_fea_list, masks))[~masks, :] + atom_fea # [masks == False, :]
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
+        cry_fea = atom_fea.new_zeros((n_atoms.shape[0], self.atom_fea_len))
+        cry_fea = torch.index_add(cry_fea, 0, atom_batch_index, atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))
@@ -274,11 +342,12 @@ class tModLodaer_t(nn.Module):
         return out
 
 
-class tModLodaer(nn.Module):
+class tModLodaer(_RuntimeModelBase):
     def __init__(self, CFG
                         ):
         
         super(tModLodaer, self).__init__()
+        self._init_runtime_buffers()
         
         atom_fea_len = CFG.node_feature_len
         nbr_fea_len = CFG.edge_feature_len
@@ -320,30 +389,43 @@ class tModLodaer(nn.Module):
         n_bond_pairs_bond: [M]
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = atom_fea.view(-1)
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds_dist = self._radial_basis(bonds_r.unsqueeze(-1), 5.0) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
+        triple_dist_ij = self._radial_basis(triple_dist_ij.unsqueeze(-1), 3.5)
+        triple_dist_ik = self._radial_basis(triple_dist_ik.unsqueeze(-1), 3.5)
 
-        edge_ij = self.w_b(bonds)
+        three_body_indices = _three_body_indices(nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
+        nbr_i, nbr_j = three_body_indices[:2]
+        atom_batch_index = _batch_index(n_atoms)
 
-        edge_ij = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                          atom_fea[nbr_atoms[:, 1]],
+        edge_ij = self.w_b(bonds_dist)
+
+        edge_ij = torch.cat([atom_fea[nbr_i],
+                          atom_fea[nbr_j],
                           edge_ij
                           ], dim=-1)
 
         edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
         
         for edge_func, conv, three in zip(self.edge_updates, self.convs, self.three):
-            edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
-            atom_fea = conv(atom_fea, edge_ij, bonds_dist, nbr_atoms)
+            edge_ij = three(
+                atom_fea,
+                edge_ij,
+                triple_dist_ij,
+                triple_dist_ik,
+                triple_a_jik,
+                nbr_atoms,
+                bond_pairs_indices,
+                n_bond_pairs_bond,
+                three_body_indices=three_body_indices,
+            )
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist, nbr_i=nbr_i, nbr_j=nbr_j)
+            atom_fea = conv(atom_fea, edge_ij, bonds_dist, nbr_atoms, nbr_i=nbr_i, nbr_j=nbr_j)
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
+        cry_fea = atom_fea.new_zeros((n_atoms.shape[0], self.atom_fea_len))
+        cry_fea = torch.index_add(cry_fea, 0, atom_batch_index, atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))

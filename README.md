@@ -32,7 +32,7 @@ p = ASECalculator(model_weight, device) # Initialize the model and load weights
 adp = AseAtomsAdaptor()
 struc = Structure.from_file('POSCAR_structure')
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 energy = atoms.get_potential_energy() # unit (eV)
 forces = atoms.get_forces() # unit (eV/Å)
@@ -113,7 +113,7 @@ struc = Structure.from_file('POSCAR_structure') # Read structure
 
 adp = AseAtomsAdaptor()
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 optimizer = BFGS(atoms)
 optimizer.run(fmax=0.01, steps=1000)
@@ -139,7 +139,7 @@ struc = Structure.from_file('POSCAR_structure') # Read structure
 
 adp = AseAtomsAdaptor()
 atoms = adp.get_atoms(struc)
-atoms.set_calculator(p)
+atoms.calc = p
 
 save_dir = './results_path'
 os.makedirs(save_dir, exist_ok=True)
@@ -155,6 +155,33 @@ dyn = NVTBerendsen(atoms=atoms,
                    append_trajectory=True)
 dyn.run(100000)
 
+```
+
+**TorchSim interface (optional):**
+
+The TorchSim model uses GPTFF V1/V2 checkpoints directly and can be used with
+TorchSim states and integrators.
+
+```python
+import torch
+import torch_sim as ts
+from ase.io import read
+from gptff.model.torchsim import GPTFFTorchSimModel
+
+model_weight = "pretrained/gptff_v1.pth"
+model = GPTFFTorchSimModel(model_weight,
+                           device="cuda",
+                           dtype=torch.float32,
+                           compute_forces=True,
+                           compute_stress=True)
+
+atoms = read("POSCAR_structure")
+state = ts.initialize_state(atoms, model.device, model.dtype)
+results = model(state)
+
+energy = results["energy"]   # unit (eV)
+forces = results["forces"]   # unit (eV/Å)
+stress = results["stress"]   # unit (eV/Å^3); use stress_unit="GPa" to match ASE
 ```
 
 ## Model training
