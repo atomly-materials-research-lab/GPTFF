@@ -20,7 +20,8 @@ import ast
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-from gptff.utils_.data import Mydataset, collate_fn, CosineAnnealingWarmupRestarts
+from gptff.model.prediction import predict_energy_forces_stress
+from gptff.utils_.data import StructureDataset, collate_graph_samples, CosineAnnealingWarmupRestarts
 from gptff.model.model import tModLodaer, tModLodaer_t
 from torch.cuda.amp import autocast, GradScaler
 from datetime import datetime
@@ -70,19 +71,19 @@ df = pd.read_csv(os.path.join(CFG.data_path, CFG.data_file))
 df_trn = df.loc[df['fold'] != CFG.val_fold].reset_index(drop=True)
 df_val = df.loc[df['fold'] == CFG.val_fold].reset_index(drop=True)
 
-trn_dataset = Mydataset(df_trn)
-val_dataset = Mydataset(df_val)
+trn_dataset = StructureDataset(df_trn)
+val_dataset = StructureDataset(df_val)
 
 train_loader = DataLoader(trn_dataset, batch_size=CFG.batch_size,
                               num_workers=CFG.num_workers,
                               shuffle=True,
-                              collate_fn=collate_fn,
+                              collate_fn=collate_graph_samples,
                               pin_memory=True)
 
 val_loader = DataLoader(val_dataset, batch_size=CFG.batch_size,
                         shuffle=False,
                         num_workers=CFG.num_workers,
-                        collate_fn=collate_fn,
+                        collate_fn=collate_graph_samples,
                         pin_memory=True)
 
 
@@ -103,6 +104,7 @@ num_parameters = count_parameters(model)
 print(f'Number of Model parameters: {num_parameters}')
 
 criterion = nn.HuberLoss()
+use_cuda_amp = torch.device(CFG.device).type == "cuda"
 
 optimizer = optim.AdamW(model.parameters(), CFG.lr,
                                weight_decay= CFG.weight_decay)
@@ -154,64 +156,27 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
 
     end = time.time()
 
-    for i, (data) in enumerate(train_loader):
+    for i, batch in enumerate(train_loader):
 
-        data = [x.to(CFG.device) for x in data]
+        batch = batch.to(CFG.device)
 
         pbar_trn.update(1)
 
         data_time.update(time.time() - end)
 
-        atom_fea, coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, target_energy, target_forces, target_stress, ref_energy = data
-        coords = coords.requires_grad_(True)
-        strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
-    
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strain)
-
-        try:
-            volumes = torch.linalg.det(lattices)
-        except:
-            continue
-
-        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
-
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
-        
-        offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
-
-        vec_diff_ij = (
-                coords[nbr_atoms[:, 1], :]
-                + offset_dist
-                - coords[nbr_atoms[:, 0], :]
+        with autocast(enabled=use_cuda_amp):
+            ener_pred, force_pred, stress_pred = predict_energy_forces_stress(
+                model,
+                batch,
+                unit_trans=CFG.unit_trans,
+                create_graph=True,
             )
-
-        pair_vec_ij = vec_diff_ij
-        pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-        triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-        triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-        triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
-        triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
-        triple_a_jik = triple_a_jik.squeeze()
-        
-        # compute output
-
-        with autocast():
-
-            ener_pred = model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
-            ener_pred = ener_pred.squeeze() + ref_energy
-            force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=True, create_graph=True)
-            force_pred = -1.0 * force_pred
-            stress_pred = 1. / volumes[:, None, None] * stress_pred * CFG.unit_trans
-
-            ener_pred = ener_pred.squeeze() / n_atoms
-            target_energy = target_energy.squeeze() / n_atoms
+            ener_pred = ener_pred.squeeze() / batch.num_atoms
+            target_energy = batch.energy.squeeze() / batch.num_atoms
             
             e_loss = criterion(ener_pred, target_energy)
-            f_loss = criterion(force_pred.view(-1), target_forces.view(-1))
-            s_loss = criterion(stress_pred.view(-1), target_stress.view(-1))
+            f_loss = criterion(force_pred.view(-1), batch.forces.view(-1))
+            s_loss = criterion(stress_pred.view(-1), batch.stress.view(-1))
 
             loss = CFG.w1 * e_loss + CFG.w2 * f_loss + CFG.w3 * s_loss
         
@@ -229,10 +194,10 @@ def train(train_loader, model, criterion, optimizer, pbar_trn):
         mae_error = mae(ener_pred.detach().cpu(), target_energy.detach().cpu()) 
         losses.update(loss.detach().cpu(), target_energy.size(0))
         mae_errors.update(mae_error, target_energy.size(0))
-        force_error = mae(force_pred.detach().cpu().reshape(-1), target_forces.cpu().reshape(-1))
-        force_errors.update(force_error, target_forces.size(0))
-        stress_error = mae(stress_pred.detach().cpu().reshape(-1), target_stress.cpu().reshape(-1))
-        stress_errors.update(stress_error, target_stress.size(0) * 9)
+        force_error = mae(force_pred.detach().cpu().reshape(-1), batch.forces.cpu().reshape(-1))
+        force_errors.update(force_error, batch.forces.size(0))
+        stress_error = mae(stress_pred.detach().cpu().reshape(-1), batch.stress.cpu().reshape(-1))
+        stress_errors.update(stress_error, batch.stress.size(0) * 9)
     
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -272,63 +237,25 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
     forces_gt, energy_gt, stress_gt = [], [], []
     forces_pred, energy_pred, stress_preds = [], [], []
 
-    for i, (data) in enumerate(val_loader):
+    for i, batch in enumerate(val_loader):
 
-        data = [x.to(CFG.device) for x in data]
+        batch = batch.to(CFG.device)
         pbar_val.update(1)
 
-        atom_fea, coords, offsets, lattice, n_atoms, pairs_count, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond, target_energy, target_forces, target_stress, ref_energy = data
-        coords = coords.requires_grad_(True)
-        strain = torch.zeros_like(lattice, dtype=torch.float32).requires_grad_(True)
+        with autocast(enabled=use_cuda_amp):
+            ener_pred, force_pred, stress_pred = predict_energy_forces_stress(
+                model,
+                batch,
+                unit_trans=CFG.unit_trans,
+                create_graph=False,
+            )
 
-        lattices = torch.matmul(lattice, torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strain)
-
-        try:
-            volumes = torch.linalg.det(lattices)
-        except:
-            continue
-        
-        strains = torch.repeat_interleave(strain, n_atoms, dim=0)
-        coords = torch.matmul(coords.unsqueeze(1), torch.eye(3, dtype=torch.float32)[None, :, :].to(CFG.device) + strains).squeeze()
-
-        lattices = lattices[torch.repeat_interleave(torch.arange(pairs_count.shape[0]).to(CFG.device), pairs_count)]
-
-        with autocast():
-            
-            offset_dist = torch.matmul(offsets[:, None, :], lattices).squeeze()
-            # offset_dist = torch.matmul(lattices, offsets[:, :, None]).squeeze()
-
-            vec_diff_ij = (
-                    coords[nbr_atoms[:, 1], :]
-                    + offset_dist
-                    - coords[nbr_atoms[:, 0], :]
-                )
-
-            pair_vec_ij = vec_diff_ij
-            pair_dist_ij = torch.sqrt(torch.matmul(pair_vec_ij[:, None, :], pair_vec_ij[:, :, None])).squeeze()
-            triple_vec_ij = pair_vec_ij[bond_pairs_indices[:, 0]].squeeze()
-            triple_vec_ik = pair_vec_ij[bond_pairs_indices[:, 1]].squeeze()
-            triple_dist_ij = pair_dist_ij[bond_pairs_indices[:, 0]].squeeze()
-            triple_dist_ik = pair_dist_ij[bond_pairs_indices[:, 1]].squeeze()
-            triple_a_jik = torch.matmul(triple_vec_ij[:, None, :], triple_vec_ik[:, :, None]).squeeze(-1) / (triple_dist_ij[:, None] * triple_dist_ik[:, None])
-            triple_a_jik = torch.clamp(triple_a_jik, -1., 1.) * (1 - 1e-6)
-            triple_a_jik = triple_a_jik.squeeze()
-            
-
-            ener_pred = model(atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices)
-            
-            ener_pred = ener_pred.squeeze() + ref_energy
-
-            force_pred, stress_pred = torch.autograd.grad(ener_pred, [coords, strain], torch.ones_like(ener_pred), retain_graph=True, create_graph=True)
-            force_pred = -1.0 * force_pred
-            stress_pred = 1. / volumes[:, None, None] * stress_pred * 160.21766208
-
-            ener_pred = ener_pred.squeeze() / n_atoms
-            target_energy = target_energy.squeeze() / n_atoms
+            ener_pred = ener_pred.squeeze() / batch.num_atoms
+            target_energy = batch.energy.squeeze() / batch.num_atoms
 
             e_loss = criterion(ener_pred.view(-1), target_energy.view(-1))
-            f_loss = criterion(force_pred.view(-1), target_forces.view(-1))
-            s_loss = criterion(stress_pred.view(-1), target_stress.view(-1))
+            f_loss = criterion(force_pred.view(-1), batch.forces.view(-1))
+            s_loss = criterion(stress_pred.view(-1), batch.stress.view(-1))
 
             loss = CFG.w1 * e_loss + CFG.w2 * f_loss + CFG.w3 * s_loss
 
@@ -347,10 +274,10 @@ def validate(val_loader, model, criterion, pbar_trn, pbar_val):
         mae_error = mae(ener_pred.detach().cpu(), target_energy.detach().cpu())
         losses.update(loss.detach().cpu().item(), target_energy.size(0))
         mae_errors.update(mae_error, target_energy.size(0))
-        force_error = mae(force_pred.detach().cpu().reshape(-1), target_forces.detach().cpu().reshape(-1))
-        force_errors.update(force_error, target_forces.size(0))
-        stress_error = mae(stress_pred.detach().cpu().reshape(-1), target_stress.detach().cpu().reshape(-1))
-        stress_errors.update(stress_error, target_stress.size(0) * 9)
+        force_error = mae(force_pred.detach().cpu().reshape(-1), batch.forces.detach().cpu().reshape(-1))
+        force_errors.update(force_error, batch.forces.size(0))
+        stress_error = mae(stress_pred.detach().cpu().reshape(-1), batch.stress.detach().cpu().reshape(-1))
+        stress_errors.update(stress_error, batch.stress.size(0) * 9)
 
         # measure elapsed time
         batch_time.update(time.time() - end)

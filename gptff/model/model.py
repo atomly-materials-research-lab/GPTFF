@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 
@@ -22,36 +23,35 @@ class ThreeBody(nn.Module):
         self.W_1 = nn.Linear(nbr_fea_len, nbr_fea_len)
         self.W_2 = nn.Linear(nbr_fea_len, nbr_fea_len)
 
-    def forward(self, atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond):
+    def forward(self, atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik):
         """
         atom_fea: [N, atom_fea_len]
         edge_ij: [M, nbr_fea_len]
-        bonds_r: [M]
-        triple_dist_ik: [L, 16]
-        triple_a_jik: [L]
-        nbr_atoms: [M, 2]
-        n_bond_pairs_bond: [M]
+        graph.triplet_edge_index: [2, L]
         """
 
-        triple_i_indices = nbr_atoms[:, 0][bond_pairs_indices[:, 1]]
-        triple_j_indices = nbr_atoms[:, 1][bond_pairs_indices[:, 0]]
-        triple_k_indices = nbr_atoms[:, 1][bond_pairs_indices[:, 1]]
+        if graph.triplet_edge_index.numel() == 0:
+            return edge_ij
+
+        edge_ij_indices = graph.triplet_edge_index[0]
+        edge_ik_indices = graph.triplet_edge_index[1]
+        triple_i_indices = graph.edge_index[0][edge_ij_indices]
+        triple_j_indices = graph.edge_index[1][edge_ij_indices]
+        triple_k_indices = graph.edge_index[1][edge_ik_indices]
         atom_fea_ik = torch.cat([atom_fea[triple_i_indices],
                              atom_fea[triple_j_indices],
                              atom_fea[triple_k_indices],
-                             edge_ij[bond_pairs_indices[:, 0]],
-                             edge_ij[bond_pairs_indices[:, 1]]], dim=-1)
+                             edge_ij[edge_ij_indices],
+                             edge_ij[edge_ik_indices]], dim=-1)
         
         atom_fea_ik = self.swish(self.W_fea(atom_fea_ik))
 
-        angles_mat = self.angle_embedding(triple_a_jik.unsqueeze(-1)) # L, nbr_fea_len
-        bonds_mat_k = self.bond_embedding_k(triple_dist_ik) # L, nbr_fea_len
-        bonds_mat_j = self.bond_embedding_j(triple_dist_ij)
+        angles_mat = self.angle_embedding(graph.triplet_cosine.unsqueeze(-1)) # L, nbr_fea_len
+        bonds_mat_k = self.bond_embedding_k(triplet_basis_ik) # L, nbr_fea_len
+        bonds_mat_j = self.bond_embedding_j(triplet_basis_ij)
         atom_fea_ik = self.sig(self.W_1(atom_fea_ik)) * self.swish(self.W_2(atom_fea_ik)) * bonds_mat_j * bonds_mat_k * angles_mat
-        # mat = angles_mat * bonds_mat * atom_fea_ik
 
-        # atom_nbr_fea_ik = self.sig(mat)  # N, M, M-1, atom_fea
-        edge_ij = torch.index_add(edge_ij, 0, torch.repeat_interleave(torch.arange(n_bond_pairs_bond.shape[0]).to(self.device), n_bond_pairs_bond), atom_fea_ik)
+        edge_ij = torch.index_add(edge_ij, 0, edge_ij_indices, atom_fea_ik)
         return edge_ij
 
 class EdgeUpdate(nn.Module):
@@ -66,9 +66,9 @@ class EdgeUpdate(nn.Module):
         self.W_r = nn.Linear(16, nbr_fea_len)
         self.W_3 = nn.Linear(nbr_fea_len, nbr_fea_len)
 
-    def forward(self, atom_fea, edge_ij, nbr_atoms, bonds_r):
-        atom_nbr_fea = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                                  atom_fea[nbr_atoms[:, 1]],
+    def forward(self, atom_fea, edge_ij, graph, bonds_r):
+        atom_nbr_fea = torch.cat([atom_fea[graph.edge_index[0]],
+                                  atom_fea[graph.edge_index[1]],
                                   edge_ij], dim=-1)
         
         edge_ij = self.swish(self.W_1(atom_nbr_fea)) * self.sig(self.W_2(atom_nbr_fea))
@@ -92,22 +92,22 @@ class ConvLayer(nn.Module):
         self.W_1 = nn.Linear(2 * atom_fea_len, atom_fea_len)
         self.W_2 = nn.Linear(2 * atom_fea_len, atom_fea_len)
 
-    def forward(self, atom_fea, edge_ij, bonds_r, nbr_atoms):
-        atom_nbr_fea = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                                  atom_fea[nbr_atoms[:, 1]],
+    def forward(self, atom_fea, edge_ij, bonds_r, graph):
+        atom_nbr_fea = torch.cat([atom_fea[graph.edge_index[0]],
+                                  atom_fea[graph.edge_index[1]],
                                   edge_ij], dim=-1)
         atom_gated_fea = self.swish(self.fc_full(atom_nbr_fea))
 
         nbr_all = self.swish(self.W_1(atom_gated_fea)) * self.sig(self.W_2(atom_gated_fea))
         nbr_all = nbr_all * self.W_r(bonds_r)
-        atom_fea = torch.index_add(atom_fea, 0, nbr_atoms[:, 0], nbr_all.float())
+        atom_fea = torch.index_add(atom_fea, 0, graph.edge_index[0], nbr_all.float())
 
         return atom_fea
 
-def ebf(d_ij, rcut, device):
+def ebf(d_ij, rcut):
     radius = rcut
-    filters = torch.arange(0, 16, 1).to(device)
-    return torch.sqrt(torch.tensor(2.) / radius) * torch.sin(filters * torch.pi / radius * d_ij) / d_ij
+    filters = torch.arange(0, 16, 1, dtype=d_ij.dtype, device=d_ij.device)
+    return torch.sqrt(torch.tensor(2.0, dtype=d_ij.dtype, device=d_ij.device) / radius) * torch.sin(filters * torch.pi / radius * d_ij) / d_ij
 
 class Attention(nn.Module):
     def __init__(self, d_model, heads=8, dim_head=64):
@@ -209,62 +209,58 @@ class tModLodaer_t(nn.Module):
         
         self.fc_out = nn.Linear(atom_fea_len, 1)
 
-    def forward(self, atom_fea, bonds_r, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices):
+    def forward(self, graph):
         """
-        atom_fea: [N,1]
-        bonds_r: [M]
-        triple_dist_ij: [L]
-        triple_dist_ik: [L]
-        triple_a_jik: [L]
-        nbr_atoms: [M, 2]
-        n_bond_pairs_bond: [M]
+        graph: DifferentiableGraphBatch
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = graph.atom_types
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds_dist = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
+        bonds = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
+        triplet_basis_ij = ebf(graph.triplet_lengths_ij.unsqueeze(-1), 3.5)
+        triplet_basis_ik = ebf(graph.triplet_lengths_ik.unsqueeze(-1), 3.5)
 
         edge_ij = self.w_b(bonds)
 
-        edge_ij = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                          atom_fea[nbr_atoms[:, 1]],
+        edge_ij = torch.cat([atom_fea[graph.edge_index[0]],
+                          atom_fea[graph.edge_index[1]],
                           edge_ij
                           ], dim=-1)
 
         edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
         
-        max_len = torch.max(n_atoms)
-        # print(max_len)
-        masks = torch.ones(len(n_atoms), max_len)
+        max_len = int(torch.max(graph.num_atoms).item())
+        masks = torch.ones((graph.num_atoms.shape[0], max_len), device=atom_fea.device)
 
         for ii in range(len(masks)):
-            masks[ii, :n_atoms[ii]] = 0.0
+            masks[ii, :graph.num_atoms[ii]] = 0.0
 
-        masks = masks.to(torch.bool).to(self.device) # bs, max_len
+        masks = masks.to(torch.bool) # bs, max_len
 
         for edge_func, conv, three, transformer, norm1, norm2 in zip(self.edge_updates, self.convs, self.three, self.transformers, self.norms1, self.norms2):
-            edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
-            atom_fea = norm1(conv(atom_fea, edge_ij, bonds_dist, nbr_atoms))
+            edge_ij = three(atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik)
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, bonds_dist)
+            atom_fea = norm1(conv(atom_fea, edge_ij, bonds_dist, graph))
 
             atom_fea_list = []
 
             c_atom = 0
-            for n_atom in n_atoms:
+            for n_atom in graph.num_atoms.tolist():
                 atom_fea_list.append(atom_fea[c_atom:c_atom+n_atom])
                 c_atom += n_atom
 
             atom_fea_list = pad_sequence(atom_fea_list, batch_first=True) # bs, seq_len, fea_len
 
-            # atom_fea = torch.cat([transformer(torch.index_select(atom_fea, 0, idx_map)) for idx_map in crystal_atom_idx], dim=0) + atom_fea
             atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
+        cry_fea = torch.zeros(
+            (graph.num_atoms.shape[0], self.atom_fea_len),
+            dtype=atom_fea.dtype,
+            device=atom_fea.device,
+        )
+        cry_fea = torch.index_add(cry_fea, 0, graph.atom_batch, atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))
@@ -309,41 +305,39 @@ class tModLodaer(nn.Module):
         
         self.fc_out = nn.Linear(atom_fea_len, 1)
 
-    def forward(self, atom_fea, bonds_r, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices):
+    def forward(self, graph):
         """
-        atom_fea: [N,1]
-        bonds_r: [M]
-        triple_dist_ij: [L]
-        triple_dist_ik: [L]
-        triple_a_jik: [L]
-        nbr_atoms: [M, 2]
-        n_bond_pairs_bond: [M]
+        graph: DifferentiableGraphBatch
         """
 
-        atom_fea = atom_fea.squeeze()
+        atom_fea = graph.atom_types
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
-        bonds = ebf(bonds_r.unsqueeze(-1), 5.0, self.device) # M, 16
+        bonds_dist = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
+        bonds = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
         
-        triple_dist_ij = ebf(triple_dist_ij.unsqueeze(-1), 3.5, self.device)
-        triple_dist_ik = ebf(triple_dist_ik.unsqueeze(-1), 3.5, self.device)
+        triplet_basis_ij = ebf(graph.triplet_lengths_ij.unsqueeze(-1), 3.5)
+        triplet_basis_ik = ebf(graph.triplet_lengths_ik.unsqueeze(-1), 3.5)
 
         edge_ij = self.w_b(bonds)
 
-        edge_ij = torch.cat([atom_fea[nbr_atoms[:, 0]],
-                          atom_fea[nbr_atoms[:, 1]],
+        edge_ij = torch.cat([atom_fea[graph.edge_index[0]],
+                          atom_fea[graph.edge_index[1]],
                           edge_ij
                           ], dim=-1)
 
         edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
         
         for edge_func, conv, three in zip(self.edge_updates, self.convs, self.three):
-            edge_ij = three(atom_fea, edge_ij, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, bond_pairs_indices, n_bond_pairs_bond)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, nbr_atoms, bonds_dist)
-            atom_fea = conv(atom_fea, edge_ij, bonds_dist, nbr_atoms)
+            edge_ij = three(atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik)
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, bonds_dist)
+            atom_fea = conv(atom_fea, edge_ij, bonds_dist, graph)
 
-        cry_fea = torch.zeros((len(n_atoms), self.atom_fea_len)).to(self.device)
-        cry_fea = torch.index_add(cry_fea, 0, torch.repeat_interleave(torch.arange(n_atoms.shape[0]).to(self.device), n_atoms), atom_fea)
+        cry_fea = torch.zeros(
+            (graph.num_atoms.shape[0], self.atom_fea_len),
+            dtype=atom_fea.dtype,
+            device=atom_fea.device,
+        )
+        cry_fea = torch.index_add(cry_fea, 0, graph.atom_batch, atom_fea)
         
         cry_fea = self.swish(self.fc1(cry_fea))
         cry_fea = self.swish(self.fc2(cry_fea))

@@ -48,7 +48,7 @@ from gptff.model.mpredict import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
-from ase.constraints import ExpCellFilter, StrainFilter
+from ase.filters import ExpCellFilter, StrainFilter
 
 model_weight = "pretrained/gptff_v1.pth"
 device = 'cuda' # or cpu

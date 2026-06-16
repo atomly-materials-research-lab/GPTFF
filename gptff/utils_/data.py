@@ -1,149 +1,49 @@
-from __future__ import print_function, division
+from __future__ import division, print_function
 
-import functools
-import json
-import os
-import random
-import warnings
 import ast
+import functools
+import math
 
 import numpy as np
 import torch
 from pymatgen.core.structure import Structure
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data.dataloader import default_collate
-from torch.utils.data.sampler import SubsetRandomSampler
-import pandas as pd
-from gptff.utils_.compute_tp import compute_tp_cc
-from gptff.utils_.compute_nb import find_neighbors
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import Dataset
 
-from torch.optim.lr_scheduler import ReduceLROnPlateau,_LRScheduler
-import math
+from gptff.graph import CrystalGraphConverter, GraphSample, batch_samples
 
-class Mydataset(Dataset):
-    def __init__(self, df, pbc=[1, 1, 1], r_cut=5.0, a_cut=3.5):
-        """
-        r_cut: cutoff for bonds
-        a_cut: cutoff for angles
-        """
 
-        self.df = df
-        self.r_cut = r_cut
-        self.a_cut = a_cut
-        self.pbc = pbc
+class StructureDataset(Dataset):
+    def __init__(self, df, r_cut=5.0, a_cut=3.5, numerical_tol=1e-8):
+        self.df = df.reset_index(drop=True)
+        self.converter = CrystalGraphConverter(
+            r_cut=r_cut,
+            a_cut=a_cut,
+            numerical_tol=numerical_tol,
+        )
 
     def __len__(self):
         return len(self.df)
 
-    @functools.lru_cache(maxsize=None)  # Cache loaded structures
+    @functools.lru_cache(maxsize=None)
     def __getitem__(self, idx):
         try:
-            struc = Structure.from_dict(ast.literal_eval(self.df['structure'][idx]))
-
-            energy = self.df['energy'][idx]
-            forces = np.array(ast.literal_eval(self.df['forces'][idx]))
-            stress = np.array(ast.literal_eval(self.df['stress'][idx])) * -0.1
-            ref_energy = np.array(self.df['ref_energy'][idx])
-
-        except Exception:
-            idx = random.randint(0, len(self) - 1)
-            return self.__getitem__(idx)
-        
-        i, j, offset, d_ij = find_neighbors(np.array(struc.cart_coords), np.array(struc.lattice.matrix), self.r_cut, np.array(self.pbc, dtype=np.int32))
-        nbr_atoms = np.array([i, j], dtype=np.int32).T
-
-        if len(nbr_atoms) == 0:
-            n_bond_pairs_atoms = np.array([0] * len(struc), dtype=np.int32)
-            n_bond_pairs_bond = np.array([], dtype=np.int32)
-            bond_pairs_indices = np.array([], dtype=np.int32).reshape(-1, 2)
-        else:
-            n_bond_pairs_atom, n_bond_pairs_bond, bond_pairs_indices = compute_tp_cc(nbr_atoms, d_ij, self.a_cut, len(struc))
-        
-
-        n_bond_pairs_struc = np.array([np.sum(n_bond_pairs_atom)], dtype=np.int32)
-
-        atom_fea = np.vstack([struc[i].specie.number
-                              for i in range(len(struc))])
-        
-        return atom_fea, np.array(struc.cart_coords), d_ij, offset, np.array(struc.lattice.matrix), nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, energy, forces, stress, ref_energy 
-    
-
-def collate_fn(data):
-    """
-    Collate for batch
-    """
-    batch_atom_fea, batch_coords, batch_d_ij, batch_offset, batch_lattices, batch_nbr_atoms, batch_bond_pairs_indices, batch_n_bond_pairs_atom, batch_n_bond_pairs_bond, batch_n_bond_pairs_struc = [], [], [], [], [], [], [], [], [], []
-
-    n_atoms, pairs_count = [], []
-    batch_energy, batch_forces, batch_stress = [], [], []
-    batch_ref_energy = []
-
-    for _, (atom_fea, coords, d_ij, offset, lattices, nbr_atoms, bond_pairs_indices, n_bond_pairs_atom, n_bond_pairs_bond, n_bond_pairs_struc, energy, forces, stress, ref_energy) in enumerate(data):
-        batch_atom_fea.append(atom_fea)
-        batch_coords.append(coords)
-        batch_d_ij.append(d_ij)
-        batch_offset.append(offset)
-        batch_lattices.append(lattices)
-        batch_nbr_atoms.append(nbr_atoms)
-        batch_bond_pairs_indices.append(bond_pairs_indices)
-
-        batch_n_bond_pairs_atom.append(n_bond_pairs_atom)
-        batch_n_bond_pairs_bond.append(n_bond_pairs_bond)
-        batch_n_bond_pairs_struc.append(n_bond_pairs_struc)
-
-        n_atoms.append(coords.shape[0])
-        pairs_count.append(d_ij.shape[0])
-
-        batch_energy.append(energy)
-        batch_forces.append(forces)
-        batch_stress.append(stress)
-
-        batch_ref_energy.append(ref_energy)
-    
-    batch_energy = np.stack(batch_energy)
-    batch_forces = np.concatenate(batch_forces)
-    batch_stress = np.stack(batch_stress)
-
-    batch_ref_energy = np.stack(batch_ref_energy)
-    # n_atoms = np.array([i.shape[0] for i in batch_coords])
-    n_atoms = np.array(n_atoms)
-    pairs_count = np.array(pairs_count)
-
-    # n_atoms = n_atoms[:-1]
-    n_atom_cumsum = np.cumsum(np.concatenate([[0], n_atoms[:-1]]))
-    nbr_atoms = np.concatenate(batch_nbr_atoms, axis=0)
-
-    nbr_atoms += np.repeat(n_atom_cumsum, pairs_count)[:, None]
-
-    bond_pairs_indices = np.concatenate(batch_bond_pairs_indices)
-    pairs_cumsum = np.cumsum(np.concatenate([[0], pairs_count[:-1]]))
-    n_bond_pairs_struc = np.concatenate(batch_n_bond_pairs_struc)
-    n_bond_pairs_struc_temp = np.array([i for i in n_bond_pairs_struc])
-    bond_pairs_indices += np.repeat(pairs_cumsum, n_bond_pairs_struc_temp)[:, None]
-    
-    n_bond_pairs_atom = np.concatenate(batch_n_bond_pairs_atom)
-    n_bond_pairs_bond = np.concatenate(batch_n_bond_pairs_bond)
-
-    atom_fea = np.concatenate(batch_atom_fea)
-    coords = np.concatenate(batch_coords)
-    d_ij = np.concatenate(batch_d_ij)
-    offset = np.concatenate(batch_offset)
-    lattices = np.stack(batch_lattices)
+            row = self.df.iloc[idx]
+            structure = Structure.from_dict(ast.literal_eval(row["structure"]))
+            graph = self.converter.convert(structure)
+            return GraphSample(
+                graph=graph,
+                energy=float(row["energy"]),
+                forces=np.asarray(ast.literal_eval(row["forces"]), dtype=np.float32),
+                stress=np.asarray(ast.literal_eval(row["stress"]), dtype=np.float32) * -0.1,
+                ref_energy=float(row["ref_energy"]),
+            )
+        except Exception as exc:
+            raise ValueError(f"Failed to load structure row {idx}.") from exc
 
 
-    return torch.tensor(atom_fea, dtype=torch.long), \
-           torch.tensor(coords, dtype=torch.float32), \
-           torch.tensor(offset, dtype=torch.float32), \
-           torch.tensor(lattices, dtype=torch.float32), \
-           torch.tensor(n_atoms, dtype=torch.long), \
-           torch.tensor(pairs_count, dtype=torch.long), \
-           torch.tensor(nbr_atoms, dtype=torch.long), \
-           torch.tensor(bond_pairs_indices, dtype=torch.long), \
-           torch.tensor(n_bond_pairs_bond, dtype=torch.long), \
-           torch.tensor(batch_energy, dtype=torch.float32), \
-           torch.tensor(batch_forces, dtype=torch.float32), \
-           torch.tensor(batch_stress, dtype=torch.float32), \
-           torch.tensor(batch_ref_energy, dtype=torch.float32)
+def collate_graph_samples(samples):
+    return batch_samples(samples)
 
 
 class CosineAnnealingWarmupRestarts(_LRScheduler):
