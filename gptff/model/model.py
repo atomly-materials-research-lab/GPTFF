@@ -6,6 +6,44 @@ from torch.nn.utils.rnn import pad_sequence
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 
 
+class AtomEmbedding(nn.Module):
+    def __init__(self, atom_fea_len, max_atomic_number=94, normalize=True):
+        super().__init__()
+        if max_atomic_number < 1:
+            raise ValueError("max_atomic_number must be positive.")
+
+        self.max_atomic_number = int(max_atomic_number)
+        self.embedding = nn.Embedding(self.max_atomic_number + 1, atom_fea_len)
+        self.norm = nn.LayerNorm(atom_fea_len) if normalize else nn.Identity()
+
+    def forward(self, atom_types):
+        if atom_types.numel() > 0:
+            torch._assert(
+                torch.all((atom_types >= 1) & (atom_types <= self.max_atomic_number)),
+                f"Atomic numbers must be in the range [1, {self.max_atomic_number}].",
+            )
+        return self.norm(self.embedding(atom_types))
+
+
+class EdgeEmbedding(nn.Module):
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, normalize=True):
+        super().__init__()
+        self.bond_embedding = nn.Linear(num_radial, nbr_fea_len, bias=False)
+        self.edge_embedding = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
+        self.radial_gate = nn.Linear(num_radial, nbr_fea_len, bias=False)
+        self.norm = nn.LayerNorm(nbr_fea_len) if normalize else nn.Identity()
+
+    def forward(self, atom_fea, edge_index, edge_basis):
+        bond_fea = self.bond_embedding(edge_basis)
+        edge_fea = torch.cat([
+            atom_fea[edge_index[0]],
+            atom_fea[edge_index[1]],
+            bond_fea,
+        ], dim=-1)
+        edge_fea = self.edge_embedding(edge_fea) * self.radial_gate(edge_basis)
+        return self.norm(edge_fea)
+
+
 class ThreeBody(nn.Module):
     def __init__(self, atom_fea_len, nbr_fea_len, num_radial, num_angular, device):
         super(ThreeBody, self).__init__()
@@ -412,6 +450,7 @@ class tModLodaer(nn.Module):
         radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
         angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
+        max_atomic_number = getattr(CFG, "max_atomic_number", 94)
 
         self.device = CFG.device
 
@@ -421,12 +460,11 @@ class tModLodaer(nn.Module):
         self.num_angular = num_angular
         self.radial_cutoff = radial_cutoff
         self.angle_cutoff = angle_cutoff
-        self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
+        self.max_atomic_number = max_atomic_number
+        self.atom_embedding = AtomEmbedding(atom_fea_len, max_atomic_number=max_atomic_number)
+        self.edge_embedding = EdgeEmbedding(atom_fea_len, nbr_fea_len, num_radial)
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
         self.triplet_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
-        self.w_b = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.w_eij = nn.Linear(nbr_fea_len* 3, nbr_fea_len)
-        self.w_r = nn.Linear(num_radial, nbr_fea_len, bias=False)
 
         self.interactions = nn.ModuleList([
             InteractionBlock(
@@ -445,21 +483,12 @@ class tModLodaer(nn.Module):
         graph: DifferentiableGraphBatch
         """
 
-        atom_fea = graph.atom_types
-        atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        edge_basis = self.edge_rbf(graph.edge_lengths) # M, num_radial
+        atom_fea = self.atom_embedding(graph.atom_types)
+        edge_basis = self.edge_rbf(graph.edge_lengths)
         
         triplet_basis_ij = self.triplet_rbf(graph.triplet_lengths_ij)
         triplet_basis_ik = self.triplet_rbf(graph.triplet_lengths_ik)
-
-        edge_ij = self.w_b(edge_basis)
-
-        edge_ij = torch.cat([atom_fea[graph.edge_index[0]],
-                          atom_fea[graph.edge_index[1]],
-                          edge_ij
-                          ], dim=-1)
-
-        edge_ij = self.w_eij(edge_ij) * self.w_r(edge_basis)
+        edge_ij = self.edge_embedding(atom_fea, graph.edge_index, edge_basis)
         
         for interaction in self.interactions:
             atom_fea, edge_ij = interaction(

@@ -51,13 +51,7 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
     triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
     triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
 
-    edge_ij = model.w_b(edge_basis)
-    edge_ij = torch.cat([
-        atom_fea[graph.edge_index[0]],
-        atom_fea[graph.edge_index[1]],
-        edge_ij,
-    ], dim=-1)
-    edge_ij = model.w_eij(edge_ij) * model.w_r(edge_basis)
+    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
 
     atom_out, edge_out = model.interactions[0](
         atom_fea,
@@ -82,13 +76,7 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
-    edge_ij = model.w_b(edge_basis)
-    edge_ij = torch.cat([
-        atom_fea[graph.edge_index[0]],
-        atom_fea[graph.edge_index[1]],
-        edge_ij,
-    ], dim=-1)
-    edge_ij = model.w_eij(edge_ij) * model.w_r(edge_basis)
+    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
 
     triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
     triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
