@@ -203,26 +203,26 @@ class InteractionBlock(nn.Module):
         self.pair_atom_norm = nn.LayerNorm(atom_fea_len)
         self.atom_norm = nn.LayerNorm(atom_fea_len)
 
-    def forward(self, atom_fea, edge_ij, graph, edge_modulation, triplet_modulation):
+    def forward(self, atom_fea, edge_ij, graph, geometry_features):
         pair_delta = self.edge_update(
             self.pair_atom_norm(atom_fea),
             edge_ij,
             graph,
-            edge_modulation.edge,
+            geometry_features.edge_modulation.edge,
         )
         edge_ij = edge_ij + self.residual_scale * self.residual_dropout(pair_delta)
 
         triplet_delta = self.three_body(
             edge_ij,
             graph,
-            triplet_modulation,
+            geometry_features.triplet_modulation,
         )
         edge_ij = edge_ij + self.residual_scale * self.residual_dropout(triplet_delta)
 
         atom_delta = self.atom_update(
             self.atom_norm(atom_fea),
             edge_ij,
-            edge_modulation.atom,
+            geometry_features.edge_modulation.atom,
             graph,
         )
         atom_fea = atom_fea + self.residual_scale * self.residual_dropout(atom_delta)

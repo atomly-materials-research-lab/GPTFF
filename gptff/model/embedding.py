@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from gptff.model.basis import RadialBesselBasis
+
 
 class AtomEmbedding(nn.Module):
     def __init__(self, atom_fea_len, max_atomic_number=94, normalize=True):
@@ -29,6 +31,15 @@ class AtomEmbedding(nn.Module):
 class EdgeModulation:
     atom: torch.Tensor
     edge: torch.Tensor
+
+
+@dataclass(frozen=True)
+class GeometryFeatures:
+    edge_basis: torch.Tensor
+    angle_edge_basis: torch.Tensor
+    edge_fea: torch.Tensor
+    edge_modulation: EdgeModulation
+    triplet_modulation: torch.Tensor
 
 
 class EdgeModulationProjection(nn.Module):
@@ -64,3 +75,32 @@ class EdgeEmbedding(nn.Module):
 
     def forward(self, edge_basis):
         return self.edge_embedding(edge_basis)
+
+
+class GeometryEmbedding(nn.Module):
+    def __init__(
+        self,
+        atom_fea_len,
+        nbr_fea_len,
+        num_radial,
+        radial_cutoff,
+        angle_cutoff,
+        cutoff_coeff,
+    ):
+        super().__init__()
+        self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
+        self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
+        self.edge_embedding = EdgeEmbedding(nbr_fea_len, num_radial)
+        self.edge_modulation = EdgeModulationProjection(atom_fea_len, nbr_fea_len, num_radial)
+        self.triplet_modulation = TripletModulationProjection(nbr_fea_len, num_radial)
+
+    def forward(self, graph):
+        edge_basis = self.edge_rbf(graph.edge_lengths)
+        angle_edge_basis = self.angle_edge_rbf(graph.edge_lengths)
+        return GeometryFeatures(
+            edge_basis=edge_basis,
+            angle_edge_basis=angle_edge_basis,
+            edge_fea=self.edge_embedding(edge_basis),
+            edge_modulation=self.edge_modulation(edge_basis),
+            triplet_modulation=self.triplet_modulation(angle_edge_basis),
+        )

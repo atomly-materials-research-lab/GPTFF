@@ -7,6 +7,7 @@ from gptff.model.embedding import (
     AtomEmbedding,
     EdgeEmbedding,
     EdgeModulationProjection,
+    GeometryEmbedding,
     TripletModulationProjection,
 )
 
@@ -93,9 +94,9 @@ def test_triplet_modulation_uses_angle_cutoff_independently():
     model = GPTFFNet(cfg)
     distances = torch.tensor([2.5])
 
-    edge_basis = model.edge_rbf(distances)
-    angle_edge_basis = model.angle_edge_rbf(distances)
-    triplet_modulation = model.triplet_modulation(angle_edge_basis)
+    edge_basis = model.geometry_embedding.edge_rbf(distances)
+    angle_edge_basis = model.geometry_embedding.angle_edge_rbf(distances)
+    triplet_modulation = model.geometry_embedding.triplet_modulation(angle_edge_basis)
 
     assert edge_basis.abs().sum() > 0
     assert torch.equal(angle_edge_basis, torch.zeros_like(angle_edge_basis))
@@ -118,10 +119,16 @@ def test_non_transformer_model_uses_embedding_modules():
     model = GPTFFNet(cfg)
 
     assert isinstance(model.atom_embedding, AtomEmbedding)
-    assert isinstance(model.edge_embedding, EdgeEmbedding)
-    assert isinstance(model.edge_modulation, EdgeModulationProjection)
-    assert isinstance(model.triplet_modulation, TripletModulationProjection)
+    assert isinstance(model.geometry_embedding, GeometryEmbedding)
+    assert isinstance(model.geometry_embedding.edge_embedding, EdgeEmbedding)
+    assert isinstance(model.geometry_embedding.edge_modulation, EdgeModulationProjection)
+    assert isinstance(model.geometry_embedding.triplet_modulation, TripletModulationProjection)
     assert isinstance(model.final_atom_norm, nn.LayerNorm)
+    assert not hasattr(model, "edge_embedding")
+    assert not hasattr(model, "edge_modulation")
+    assert not hasattr(model, "triplet_modulation")
+    assert not hasattr(model, "edge_rbf")
+    assert not hasattr(model, "angle_edge_rbf")
     assert not hasattr(model, "w_b")
     assert not hasattr(model, "w_eij")
     assert not hasattr(model, "w_r")

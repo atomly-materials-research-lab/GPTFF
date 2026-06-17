@@ -7,9 +7,7 @@ from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 from gptff.model.config import GPTFFNetConfig
 from gptff.model.embedding import (
     AtomEmbedding,
-    EdgeEmbedding,
-    EdgeModulationProjection,
-    TripletModulationProjection,
+    GeometryEmbedding,
 )
 from gptff.model.interaction import EdgeUpdate, InteractionBlock
 from gptff.model.readout import EnergyHead
@@ -286,11 +284,14 @@ class GPTFFNet(nn.Module):
         self.angle_cutoff = angle_cutoff
         self.max_atomic_number = max_atomic_number
         self.atom_embedding = AtomEmbedding(atom_fea_len, max_atomic_number=max_atomic_number)
-        self.edge_embedding = EdgeEmbedding(nbr_fea_len, num_radial)
-        self.edge_modulation = EdgeModulationProjection(atom_fea_len, nbr_fea_len, num_radial)
-        self.triplet_modulation = TripletModulationProjection(nbr_fea_len, num_radial)
-        self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
-        self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
+        self.geometry_embedding = GeometryEmbedding(
+            atom_fea_len=atom_fea_len,
+            nbr_fea_len=nbr_fea_len,
+            num_radial=num_radial,
+            radial_cutoff=radial_cutoff,
+            angle_cutoff=angle_cutoff,
+            cutoff_coeff=cutoff_coeff,
+        )
         self.final_atom_norm = (
             nn.LayerNorm(atom_fea_len)
             if config.final_atom_norm
@@ -329,19 +330,15 @@ class GPTFFNet(nn.Module):
 
         self._validate_graph_cutoffs(graph)
         atom_fea = self.atom_embedding(graph.atom_types)
-        edge_basis = self.edge_rbf(graph.edge_lengths)
-        angle_edge_basis = self.angle_edge_rbf(graph.edge_lengths)
-        edge_modulation = self.edge_modulation(edge_basis)
-        triplet_modulation = self.triplet_modulation(angle_edge_basis)
-        edge_ij = self.edge_embedding(edge_basis)
+        geometry_features = self.geometry_embedding(graph)
+        edge_ij = geometry_features.edge_fea
         
         for interaction in self.interactions:
             atom_fea, edge_ij = interaction(
                 atom_fea,
                 edge_ij,
                 graph,
-                edge_modulation,
-                triplet_modulation,
+                geometry_features,
             )
 
         atom_fea = self.final_atom_norm(atom_fea)
