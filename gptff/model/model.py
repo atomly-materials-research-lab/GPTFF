@@ -2,19 +2,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-import numpy as np
+
+from gptff.model.basis import RadialBesselBasis
 
 
 class ThreeBody(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, device):
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, device):
         super(ThreeBody, self).__init__()
 
         self.device = device
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
         self.angle_embedding = nn.Linear(1, nbr_fea_len)
-        self.bond_embedding_k = nn.Linear(16, nbr_fea_len)
-        self.bond_embedding_j = nn.Linear(16, nbr_fea_len)
+        self.bond_embedding_k = nn.Linear(num_radial, nbr_fea_len, bias=False)
+        self.bond_embedding_j = nn.Linear(num_radial, nbr_fea_len, bias=False)
 
         self.sig = nn.Sigmoid()
         self.swish = nn.SiLU()
@@ -55,7 +56,7 @@ class ThreeBody(nn.Module):
         return edge_ij
 
 class EdgeUpdate(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len) :
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial) :
         super(EdgeUpdate, self).__init__()
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -63,22 +64,22 @@ class EdgeUpdate(nn.Module):
         self.sig = nn.Sigmoid()
         self.W_1 = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
         self.W_2 = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
-        self.W_r = nn.Linear(16, nbr_fea_len)
+        self.W_r = nn.Linear(num_radial, nbr_fea_len, bias=False)
         self.W_3 = nn.Linear(nbr_fea_len, nbr_fea_len)
 
-    def forward(self, atom_fea, edge_ij, graph, bonds_r):
+    def forward(self, atom_fea, edge_ij, graph, edge_basis):
         atom_nbr_fea = torch.cat([atom_fea[graph.edge_index[0]],
                                   atom_fea[graph.edge_index[1]],
                                   edge_ij], dim=-1)
         
         edge_ij = self.swish(self.W_1(atom_nbr_fea)) * self.sig(self.W_2(atom_nbr_fea))
         
-        edge_ij = self.swish(self.W_3(edge_ij)) * self.W_r(bonds_r)
+        edge_ij = self.swish(self.W_3(edge_ij)) * self.W_r(edge_basis)
 
         return edge_ij
 
 class ConvLayer(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len):
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial):
         super(ConvLayer, self).__init__()
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -88,26 +89,21 @@ class ConvLayer(nn.Module):
         self.swish = nn.SiLU()
 
         self.fc_core = nn.Linear(atom_fea_len, atom_fea_len)
-        self.W_r = nn.Linear(16, atom_fea_len)
+        self.W_r = nn.Linear(num_radial, atom_fea_len, bias=False)
         self.W_1 = nn.Linear(2 * atom_fea_len, atom_fea_len)
         self.W_2 = nn.Linear(2 * atom_fea_len, atom_fea_len)
 
-    def forward(self, atom_fea, edge_ij, bonds_r, graph):
+    def forward(self, atom_fea, edge_ij, edge_basis, graph):
         atom_nbr_fea = torch.cat([atom_fea[graph.edge_index[0]],
                                   atom_fea[graph.edge_index[1]],
                                   edge_ij], dim=-1)
         atom_gated_fea = self.swish(self.fc_full(atom_nbr_fea))
 
         nbr_all = self.swish(self.W_1(atom_gated_fea)) * self.sig(self.W_2(atom_gated_fea))
-        nbr_all = nbr_all * self.W_r(bonds_r)
+        nbr_all = nbr_all * self.W_r(edge_basis)
         atom_fea = torch.index_add(atom_fea, 0, graph.edge_index[0], nbr_all.float())
 
         return atom_fea
-
-def ebf(d_ij, rcut):
-    radius = rcut
-    filters = torch.arange(0, 16, 1, dtype=d_ij.dtype, device=d_ij.device)
-    return torch.sqrt(torch.tensor(2.0, dtype=d_ij.dtype, device=d_ij.device) / radius) * torch.sin(filters * torch.pi / radius * d_ij) / d_ij
 
 class Attention(nn.Module):
     def __init__(self, d_model, heads=8, dim_head=64):
@@ -178,26 +174,38 @@ class tModLodaer_t(nn.Module):
         atom_fea_len = CFG.node_feature_len
         nbr_fea_len = CFG.edge_feature_len
         n_layers = CFG.n_layers
+        num_radial = getattr(CFG, "num_radial", 16)
+        radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
+        angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
+        cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
 
         self.device = CFG.device
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
+        self.num_radial = num_radial
+        self.radial_cutoff = radial_cutoff
+        self.angle_cutoff = angle_cutoff
         self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
-        self.w_b = nn.Linear(16, nbr_fea_len)
+        self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
+        self.triplet_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
+        self.w_b = nn.Linear(num_radial, nbr_fea_len, bias=False)
         self.w_eij = nn.Linear(nbr_fea_len* 3, nbr_fea_len)
-        self.w_r = nn.Linear(16, nbr_fea_len)
+        self.w_r = nn.Linear(num_radial, nbr_fea_len, bias=False)
 
         self.convs = nn.ModuleList([ConvLayer(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len)
+                                    nbr_fea_len=nbr_fea_len,
+                                    num_radial=num_radial)
                                     for _ in range(n_layers)])
         
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len, device=self.device) for _ in range(n_layers)])
+                                    nbr_fea_len=nbr_fea_len,
+                                    num_radial=num_radial,
+                                    device=self.device) for _ in range(n_layers)])
 
         self.transformers = nn.ModuleList([TransformerBlock(atom_fea_len) for _ in range(n_layers)])  
 
-        self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len)
+        self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len, num_radial)
                                           for _ in range(n_layers))
         
         self.norms1 = nn.ModuleList([nn.LayerNorm(atom_fea_len) for _ in range(n_layers)])
@@ -216,20 +224,19 @@ class tModLodaer_t(nn.Module):
 
         atom_fea = graph.atom_types
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
-        bonds = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
+        edge_basis = self.edge_rbf(graph.edge_lengths) # M, num_radial
         
-        triplet_basis_ij = ebf(graph.triplet_lengths_ij.unsqueeze(-1), 3.5)
-        triplet_basis_ik = ebf(graph.triplet_lengths_ik.unsqueeze(-1), 3.5)
+        triplet_basis_ij = self.triplet_rbf(graph.triplet_lengths_ij)
+        triplet_basis_ik = self.triplet_rbf(graph.triplet_lengths_ik)
 
-        edge_ij = self.w_b(bonds)
+        edge_ij = self.w_b(edge_basis)
 
         edge_ij = torch.cat([atom_fea[graph.edge_index[0]],
                           atom_fea[graph.edge_index[1]],
                           edge_ij
                           ], dim=-1)
 
-        edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
+        edge_ij = self.w_eij(edge_ij) * self.w_r(edge_basis)
         
         max_len = int(torch.max(graph.num_atoms).item())
         masks = torch.ones((graph.num_atoms.shape[0], max_len), device=atom_fea.device)
@@ -241,8 +248,8 @@ class tModLodaer_t(nn.Module):
 
         for edge_func, conv, three, transformer, norm1, norm2 in zip(self.edge_updates, self.convs, self.three, self.transformers, self.norms1, self.norms2):
             edge_ij = three(atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, bonds_dist)
-            atom_fea = norm1(conv(atom_fea, edge_ij, bonds_dist, graph))
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, edge_basis)
+            atom_fea = norm1(conv(atom_fea, edge_ij, edge_basis, graph))
 
             atom_fea_list = []
 
@@ -279,24 +286,36 @@ class tModLodaer(nn.Module):
         atom_fea_len = CFG.node_feature_len
         nbr_fea_len = CFG.edge_feature_len
         n_layers = CFG.n_layers
+        num_radial = getattr(CFG, "num_radial", 16)
+        radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
+        angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
+        cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
 
         self.device = CFG.device
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
+        self.num_radial = num_radial
+        self.radial_cutoff = radial_cutoff
+        self.angle_cutoff = angle_cutoff
         self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
-        self.w_b = nn.Linear(16, nbr_fea_len)
+        self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
+        self.triplet_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
+        self.w_b = nn.Linear(num_radial, nbr_fea_len, bias=False)
         self.w_eij = nn.Linear(nbr_fea_len* 3, nbr_fea_len)
-        self.w_r = nn.Linear(16, nbr_fea_len)
+        self.w_r = nn.Linear(num_radial, nbr_fea_len, bias=False)
 
         self.convs = nn.ModuleList([ConvLayer(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len)
+                                    nbr_fea_len=nbr_fea_len,
+                                    num_radial=num_radial)
                                     for _ in range(n_layers)])
         
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
-                                    nbr_fea_len=nbr_fea_len, device=self.device) for _ in range(n_layers)])
+                                    nbr_fea_len=nbr_fea_len,
+                                    num_radial=num_radial,
+                                    device=self.device) for _ in range(n_layers)])
 
-        self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len)
+        self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len, num_radial)
                                           for _ in range(n_layers))
 
         self.swish = nn.SiLU()
@@ -312,25 +331,24 @@ class tModLodaer(nn.Module):
 
         atom_fea = graph.atom_types
         atom_fea = self.atom_embedding(atom_fea) # N, atom_fea_len
-        bonds_dist = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
-        bonds = ebf(graph.edge_lengths.unsqueeze(-1), 5.0) # M, 16
+        edge_basis = self.edge_rbf(graph.edge_lengths) # M, num_radial
         
-        triplet_basis_ij = ebf(graph.triplet_lengths_ij.unsqueeze(-1), 3.5)
-        triplet_basis_ik = ebf(graph.triplet_lengths_ik.unsqueeze(-1), 3.5)
+        triplet_basis_ij = self.triplet_rbf(graph.triplet_lengths_ij)
+        triplet_basis_ik = self.triplet_rbf(graph.triplet_lengths_ik)
 
-        edge_ij = self.w_b(bonds)
+        edge_ij = self.w_b(edge_basis)
 
         edge_ij = torch.cat([atom_fea[graph.edge_index[0]],
                           atom_fea[graph.edge_index[1]],
                           edge_ij
                           ], dim=-1)
 
-        edge_ij = self.w_eij(edge_ij) * self.w_r(bonds_dist)
+        edge_ij = self.w_eij(edge_ij) * self.w_r(edge_basis)
         
         for edge_func, conv, three in zip(self.edge_updates, self.convs, self.three):
             edge_ij = three(atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik)
-            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, bonds_dist)
-            atom_fea = conv(atom_fea, edge_ij, bonds_dist, graph)
+            edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, edge_basis)
+            atom_fea = conv(atom_fea, edge_ij, edge_basis, graph)
 
         cry_fea = torch.zeros(
             (graph.num_atoms.shape[0], self.atom_fea_len),

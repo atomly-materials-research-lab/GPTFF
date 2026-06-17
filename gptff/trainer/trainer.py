@@ -60,6 +60,10 @@ class CFG:
     node_feature_len = js['training']['node_feature_len']
     edge_feature_len = js['training']['edge_feature_len']
     n_layers = js['training']['n_layers']
+    num_radial = js['training'].get('num_radial', 16)
+    radial_cutoff = js['training'].get('radial_cutoff', 5.0)
+    angle_cutoff = js['training'].get('angle_cutoff', 3.5)
+    cutoff_coeff = js['training'].get('cutoff_coeff', 5)
     unit_trans = 160.21766208
 
 cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}
@@ -71,8 +75,16 @@ df = pd.read_csv(os.path.join(CFG.data_path, CFG.data_file))
 df_trn = df.loc[df['fold'] != CFG.val_fold].reset_index(drop=True)
 df_val = df.loc[df['fold'] == CFG.val_fold].reset_index(drop=True)
 
-trn_dataset = StructureDataset(df_trn)
-val_dataset = StructureDataset(df_val)
+trn_dataset = StructureDataset(
+    df_trn,
+    r_cut=CFG.radial_cutoff,
+    a_cut=CFG.angle_cutoff,
+)
+val_dataset = StructureDataset(
+    df_val,
+    r_cut=CFG.radial_cutoff,
+    a_cut=CFG.angle_cutoff,
+)
 
 train_loader = DataLoader(trn_dataset, batch_size=CFG.batch_size,
                               num_workers=CFG.num_workers,

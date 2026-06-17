@@ -50,6 +50,7 @@ class ASECalculator(Calculator):
 
         cfg = CFG(self.state['cfg'])
         cfg.device = device
+        self.cfg = cfg
         if self.state['cfg']['transformer_activate']:
             self.model = model.tModLodaer_t(cfg)
         else:
@@ -57,7 +58,10 @@ class ASECalculator(Calculator):
         self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)
-        self.graph_converter = CrystalGraphConverter()
+        self.graph_converter = CrystalGraphConverter(
+            r_cut=getattr(cfg, "radial_cutoff", 5.0),
+            a_cut=getattr(cfg, "angle_cutoff", 3.5),
+        )
 
     def get_efs(self, batch):
         return predict_energy_forces_stress(
