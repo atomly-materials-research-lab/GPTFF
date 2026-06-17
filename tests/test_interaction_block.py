@@ -205,3 +205,68 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
     assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
     assert torch.equal(pair_delta, torch.zeros_like(pair_delta))
     assert torch.equal(atom_delta, torch.zeros_like(atom_delta))
+
+
+def test_interaction_block_updates_pair_then_triplet_then_atom():
+    graph = _batch()
+    model = GPTFFNet(_cfg())
+    block = model.interactions[0]
+    block.pair_atom_norm = nn.Identity()
+    block.pair_edge_norm = nn.Identity()
+    block.triplet_edge_norm = nn.Identity()
+    block.atom_norm = nn.Identity()
+    block.atom_edge_norm = nn.Identity()
+    block.edge_update = _ConstantPairDelta(value=1.0)
+    block.three_body = _ConstantTripletDelta(value=2.0)
+    block.atom_update = _RecordingAtomDelta()
+
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    edge_modulation = EdgeModulation(
+        atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+        edge=torch.zeros_like(edge_ij),
+    )
+    triplet_modulation = torch.zeros_like(edge_ij)
+
+    atom_out, edge_out = block(
+        atom_fea,
+        edge_ij,
+        graph,
+        edge_modulation,
+        triplet_modulation,
+    )
+
+    assert torch.equal(block.three_body.seen_edge, torch.ones_like(edge_ij))
+    assert torch.equal(block.atom_update.seen_edge, torch.full_like(edge_ij, 3.0))
+    assert torch.equal(edge_out, torch.full_like(edge_ij, 3.0))
+    assert torch.equal(atom_out, atom_fea)
+
+
+class _ConstantPairDelta(nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = float(value)
+
+    def forward(self, atom_fea, edge_ij, graph, edge_modulation):
+        return torch.full_like(edge_ij, self.value)
+
+
+class _ConstantTripletDelta(nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = float(value)
+        self.seen_edge = None
+
+    def forward(self, edge_ij, graph, triplet_modulation):
+        self.seen_edge = edge_ij.detach().clone()
+        return torch.full_like(edge_ij, self.value)
+
+
+class _RecordingAtomDelta(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.seen_edge = None
+
+    def forward(self, atom_fea, edge_ij, edge_modulation, graph):
+        self.seen_edge = edge_ij.detach().clone()
+        return torch.zeros_like(atom_fea)
