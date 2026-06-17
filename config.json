@@ -18,6 +18,7 @@
         "element_ref_ridge": 0.0,
         "n_layers": 3,
         "n_readout_layers": 3,
+        "readout_zero_init": true,
         "warmup_steps": 0,
         "device": "cuda",
         "output_dir": ".",

@@ -16,6 +16,7 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.num_train_steps == config.epochs
     assert config.element_refs == "atomly"
     assert config.n_readout_layers == 4
+    assert config.readout_zero_init is True
     assert config.checkpoint_dict()["data_file"] == "data.csv"
 
 
@@ -26,6 +27,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
 
     assert isinstance(model_config, GPTFFNetConfig)
     assert model_config.n_readout_layers == 4
+    assert model_config.readout_zero_init is True
     assert model_config.element_refs == "atomly"
     assert "batch_size" not in model_config.to_dict()
     assert "device" not in model_config.to_dict()
@@ -76,6 +78,7 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
 
     assert state["model_name"] == "GPTFFNet"
     assert state["model_config"]["n_readout_layers"] == 4
+    assert state["model_config"]["readout_zero_init"] is True
     assert "device" not in state["model_config"]
     assert state["cfg"]["batch_size"] == 4
     assert (tmp_path / "best_checkpoint.pth").exists()
@@ -107,6 +110,7 @@ def _raw_config():
             "fit_element_refs": False,
             "element_ref_ridge": 0.0,
             "n_readout_layers": 4,
+            "readout_zero_init": True,
             "n_layers": 1,
             "warmup_steps": 0,
             "device": "cpu",

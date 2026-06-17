@@ -12,7 +12,7 @@ from gptff.model.readout import EnergyHead
 
 
 def test_energy_head_is_extensive_for_learned_site_energy():
-    head = EnergyHead(atom_fea_len=4)
+    head = EnergyHead(atom_fea_len=4, readout_zero_init=False)
     atom_fea = torch.randn(3, 4)
     atom_types = torch.tensor([1, 1, 1], dtype=torch.long)
     atom_batch = torch.tensor([0, 0, 0], dtype=torch.long)
@@ -26,10 +26,48 @@ def test_energy_head_is_extensive_for_learned_site_energy():
 def test_energy_head_respects_readout_depth():
     head = EnergyHead(atom_fea_len=4, n_readout_layers=4)
 
-    linear_layers = [module for module in head.mlp if isinstance(module, torch.nn.Linear)]
+    hidden_linear_layers = [
+        module for module in head.hidden_mlp if isinstance(module, torch.nn.Linear)
+    ]
 
-    assert len(linear_layers) == 4
-    assert linear_layers[-1].out_features == 1
+    assert len(hidden_linear_layers) == 3
+    assert head.output_layer.out_features == 1
+
+
+def test_energy_head_zero_init_outputs_zero_residual_without_refs():
+    head = EnergyHead(atom_fea_len=4, readout_zero_init=True)
+    atom_fea = torch.randn(3, 4)
+    atom_types = torch.tensor([1, 2, 3], dtype=torch.long)
+    atom_batch = torch.tensor([0, 0, 1], dtype=torch.long)
+
+    energy = head(atom_fea, atom_types, atom_batch, num_graphs=2)
+
+    assert torch.allclose(energy, torch.zeros(2, 1))
+
+
+def test_energy_head_zero_init_outputs_element_reference_baseline():
+    head = EnergyHead(
+        atom_fea_len=4,
+        max_atomic_number=3,
+        element_refs={"1": -1.5, "3": 2.0},
+        readout_zero_init=True,
+    )
+    atom_fea = torch.randn(3, 4)
+    atom_types = torch.tensor([1, 3, 1], dtype=torch.long)
+    atom_batch = torch.tensor([0, 0, 1], dtype=torch.long)
+
+    energy = head(atom_fea, atom_types, atom_batch, num_graphs=2)
+
+    assert torch.allclose(energy.squeeze(-1), torch.tensor([0.5, -1.5]))
+
+
+def test_energy_head_can_keep_random_output_initialization():
+    head = EnergyHead(atom_fea_len=4, readout_zero_init=False)
+
+    assert not torch.equal(
+        head.output_layer.weight,
+        torch.zeros_like(head.output_layer.weight),
+    )
 
 
 def test_energy_head_adds_element_reference_energies():

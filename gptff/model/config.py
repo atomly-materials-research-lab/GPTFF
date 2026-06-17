@@ -17,6 +17,7 @@ class GPTFFNetConfig:
     max_atomic_number: int = 94
     element_refs: Any = None
     n_readout_layers: int = 3
+    readout_zero_init: bool = True
 
     def __post_init__(self) -> None:
         if self.node_feature_len <= 0:
@@ -54,6 +55,7 @@ class GPTFFNetConfig:
             max_atomic_number=int(raw_config.get("max_atomic_number", 94)),
             element_refs=raw_config.get("element_refs", None),
             n_readout_layers=int(raw_config.get("n_readout_layers", 3)),
+            readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
         )
 
     def to_dict(self) -> dict[str, Any]:

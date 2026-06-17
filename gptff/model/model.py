@@ -165,6 +165,7 @@ class tModLodaer_t(nn.Module):
         max_atomic_number = getattr(CFG, "max_atomic_number", 94)
         element_refs = getattr(CFG, "element_refs", None)
         n_readout_layers = getattr(CFG, "n_readout_layers", 3)
+        readout_zero_init = getattr(CFG, "readout_zero_init", True)
 
         self.device = CFG.device
 
@@ -206,6 +207,7 @@ class tModLodaer_t(nn.Module):
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
             n_readout_layers=n_readout_layers,
+            readout_zero_init=readout_zero_init,
         )
 
     def forward(self, graph):
@@ -298,6 +300,7 @@ class GPTFFNet(nn.Module):
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
             n_readout_layers=config.n_readout_layers,
+            readout_zero_init=config.readout_zero_init,
         )
 
     def forward(self, graph):
