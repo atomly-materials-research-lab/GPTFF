@@ -26,6 +26,7 @@
         "output_dir": ".",
         "val_fold": 0,
         "resume": false,
+        "checkpoint_path": null,
         "transformer_activate": false,
         "start_epoch": 0,
         "weight_energy": 1.0,

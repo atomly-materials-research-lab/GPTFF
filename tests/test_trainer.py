@@ -5,7 +5,13 @@ import pytest
 import torch
 
 from gptff.model import GPTFFNetConfig
-from gptff.trainer.trainer import TrainingConfig, apply_fitted_element_refs, save_checkpoint
+from gptff.trainer.trainer import (
+    TrainingConfig,
+    apply_fitted_element_refs,
+    load_training_checkpoint,
+    resolve_checkpoint_path,
+    save_checkpoint,
+)
 
 
 def test_trainer_config_parses_legacy_json_keys_without_side_effects():
@@ -23,6 +29,7 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.readout_zero_init is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.residual_scale == pytest.approx(0.5)
+    assert config.checkpoint_path is None
     assert config.checkpoint_dict()["data_file"] == "data.csv"
 
 
@@ -100,9 +107,78 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_config"]["readout_zero_init"] is True
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["residual_scale"] == pytest.approx(0.5)
+    assert state["training_config"]["batch_size"] == 4
+    assert state["label_config"]["stress_unit"] == "kbar"
     assert "device" not in state["model_config"]
     assert state["cfg"]["batch_size"] == 4
     assert (tmp_path / "best_checkpoint.pth").exists()
+
+
+def test_resolve_checkpoint_path_uses_default_current_checkpoint(tmp_path):
+    raw_config = _raw_config()
+    raw_config["training"]["output_dir"] = str(tmp_path)
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert resolve_checkpoint_path(config, tmp_path) == tmp_path / "curr_checkpoint.pth"
+
+
+def test_resolve_checkpoint_path_respects_explicit_path(tmp_path):
+    raw_config = _raw_config()
+    checkpoint_path = tmp_path / "custom.pth"
+    raw_config["training"]["checkpoint_path"] = str(checkpoint_path)
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert resolve_checkpoint_path(config, tmp_path) == checkpoint_path
+
+
+def test_load_training_checkpoint_restores_model_and_optimizer(tmp_path):
+    config = TrainingConfig.from_dict(_raw_config())
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.1)
+    loss = model(torch.ones(1, 1)).sum()
+    loss.backward()
+    optimizer.step()
+    expected_weight = model.weight.detach().clone()
+
+    save_checkpoint(
+        tmp_path,
+        model,
+        optimizer,
+        config,
+        epoch=3,
+        best_mae_error=0.2,
+        is_best=True,
+    )
+
+    restored_model = torch.nn.Linear(1, 1)
+    restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=0.1)
+    checkpoint = load_training_checkpoint(
+        tmp_path / "curr_checkpoint.pth",
+        restored_model,
+        restored_optimizer,
+        device="cpu",
+    )
+
+    assert checkpoint.epoch == 3
+    assert checkpoint.best_mae_error == pytest.approx(0.2)
+    assert checkpoint.training_config["batch_size"] == 4
+    assert checkpoint.model_config["n_readout_layers"] == 4
+    assert checkpoint.label_config["stress_unit"] == "kbar"
+    assert torch.allclose(restored_model.weight, expected_weight)
+    assert restored_optimizer.state_dict()["state"]
+
+
+def test_load_training_checkpoint_rejects_missing_file(tmp_path):
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.1)
+
+    with pytest.raises(FileNotFoundError, match="Checkpoint file not found"):
+        load_training_checkpoint(
+            tmp_path / "missing.pth",
+            model,
+            optimizer,
+            device="cpu",
+        )
 
 
 def _sample(atom_types, energy):
@@ -139,6 +215,7 @@ def _raw_config():
             "device": "cpu",
             "val_fold": 0,
             "resume": False,
+            "checkpoint_path": None,
             "transformer_activate": False,
             "start_epoch": 0,
             "weight_energy": 1.0,

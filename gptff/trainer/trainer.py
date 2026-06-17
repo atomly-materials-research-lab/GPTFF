@@ -72,6 +72,7 @@ class TrainingConfig:
     grad_clip_norm: float = 10.0
     max_loss_skip: Optional[float] = 10.0
     resume: bool = False
+    checkpoint_path: Optional[str] = None
 
     @classmethod
     def from_dict(cls, raw_config: Dict[str, Any]) -> "TrainingConfig":
@@ -121,6 +122,7 @@ class TrainingConfig:
             grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
             max_loss_skip=training.get("max_loss_skip", 10.0),
             resume=bool(training.get("resume", False)),
+            checkpoint_path=training.get("checkpoint_path", None),
         )
 
     def checkpoint_dict(self) -> Dict[str, Any]:
@@ -187,6 +189,15 @@ class EpochMetrics:
             "MAE(s)": f"{self.stress_mae.val:.3f} ({self.stress_mae.avg:.3f})",
             "skip": str(self.skipped_batches),
         }
+
+
+@dataclass(frozen=True)
+class LoadedCheckpoint:
+    epoch: int
+    best_mae_error: float
+    training_config: Optional[Dict[str, Any]]
+    model_config: Optional[Dict[str, Any]]
+    label_config: Optional[Dict[str, Any]]
 
 
 class AverageMeter:
@@ -296,6 +307,8 @@ def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Opt
 def build_scheduler(
     optimizer: optim.Optimizer,
     config: TrainingConfig,
+    *,
+    start_epoch: Optional[int] = None,
 ) -> CosineAnnealingWarmupRestarts:
     scheduler = CosineAnnealingWarmupRestarts(
         optimizer,
@@ -306,8 +319,49 @@ def build_scheduler(
         warmup_steps=config.warmup_steps,
         gamma=1.0,
     )
-    scheduler.step(config.start_epoch)
+    scheduler.step(config.start_epoch if start_epoch is None else start_epoch)
     return scheduler
+
+
+def resolve_checkpoint_path(config: TrainingConfig, output_dir: Path) -> Path:
+    if config.checkpoint_path:
+        return Path(config.checkpoint_path)
+    return output_dir / "curr_checkpoint.pth"
+
+
+def load_training_checkpoint(
+    checkpoint_path: Union[str, Path],
+    model: torch.nn.Module,
+    optimizer: optim.Optimizer,
+    *,
+    device: torch.device | str,
+    scheduler: Optional[optim.lr_scheduler._LRScheduler] = None,
+    scaler: Optional[GradScaler] = None,
+) -> LoadedCheckpoint:
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+    state = torch.load(checkpoint_path, map_location=torch.device(device))
+    model.load_state_dict(state["state_dict"])
+    optimizer.load_state_dict(state["optimizer"])
+
+    epoch = int(state.get("epoch", 0))
+    if scheduler is not None:
+        if "scheduler" in state:
+            scheduler.load_state_dict(state["scheduler"])
+        else:
+            scheduler.step(epoch)
+    if scaler is not None and "scaler" in state:
+        scaler.load_state_dict(state["scaler"])
+
+    return LoadedCheckpoint(
+        epoch=epoch,
+        best_mae_error=float(state.get("best_mae_error", 1e12)),
+        training_config=state.get("training_config", state.get("cfg")),
+        model_config=state.get("model_config"),
+        label_config=state.get("label_config"),
+    )
 
 
 def use_cuda_amp(config: TrainingConfig) -> bool:
@@ -470,6 +524,8 @@ def save_checkpoint(
     epoch: int,
     best_mae_error: float,
     is_best: bool,
+    scheduler: Optional[CosineAnnealingWarmupRestarts] = None,
+    scaler: Optional[GradScaler] = None,
 ) -> None:
     model_state = {
         "epoch": epoch,
@@ -477,9 +533,15 @@ def save_checkpoint(
         "best_mae_error": best_mae_error,
         "optimizer": optimizer.state_dict(),
         "cfg": config.checkpoint_dict(),
+        "training_config": config.checkpoint_dict(),
+        "label_config": asdict(config.to_label_config()),
         "model_name": "tModLodaer_t" if config.transformer_activate else "GPTFFNet",
         "model_config": config.to_model_config().to_dict(),
     }
+    if scheduler is not None:
+        model_state["scheduler"] = scheduler.state_dict()
+    if scaler is not None:
+        model_state["scaler"] = scaler.state_dict()
     current_path = output_dir / "curr_checkpoint.pth"
     torch.save(model_state, current_path)
     if is_best:
@@ -499,13 +561,32 @@ def run_training(config: TrainingConfig) -> float:
 
     criterion = nn.HuberLoss()
     optimizer = build_optimizer(model, config)
-    scheduler = build_scheduler(optimizer, config)
+    scheduler = build_scheduler(
+        optimizer,
+        config,
+        start_epoch=0 if config.resume else config.start_epoch,
+    )
     scaler = GradScaler(enabled=use_cuda_amp(config))
 
     best_mae_error = 1e12
+    start_epoch = config.start_epoch
+    if config.resume:
+        checkpoint_path = resolve_checkpoint_path(config, output_dir)
+        checkpoint = load_training_checkpoint(
+            checkpoint_path,
+            model,
+            optimizer,
+            device=config.device,
+            scheduler=scheduler,
+            scaler=scaler,
+        )
+        start_epoch = checkpoint.epoch
+        best_mae_error = checkpoint.best_mae_error
+        print(f"Resumed training from {checkpoint_path} at epoch {start_epoch}.")
+
     bar_format = "{l_bar}{bar:40}| [{elapsed}<{remaining}{postfix}]"
 
-    for epoch in range(config.start_epoch, config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         print(f"Epoch: [{epoch + 1}/ {config.epochs}], lr: {scheduler.get_lr()[0]:.4e}")
         sys.stdout.flush()
 
@@ -567,6 +648,8 @@ def run_training(config: TrainingConfig) -> float:
             epoch=epoch + 1,
             best_mae_error=best_mae_error,
             is_best=is_best,
+            scheduler=scheduler,
+            scaler=scaler,
         )
 
     return best_mae_error
