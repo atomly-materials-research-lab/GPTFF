@@ -18,6 +18,8 @@ class GPTFFNetConfig:
     element_refs: Any = None
     n_readout_layers: int = 3
     readout_zero_init: bool = True
+    interaction_dropout: float = 0.0
+    residual_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if self.node_feature_len <= 0:
@@ -40,6 +42,10 @@ class GPTFFNetConfig:
             raise ValueError("max_atomic_number must be positive.")
         if self.n_readout_layers <= 0:
             raise ValueError("n_readout_layers must be positive.")
+        if self.interaction_dropout < 0 or self.interaction_dropout >= 1:
+            raise ValueError("interaction_dropout must be in the range [0, 1).")
+        if self.residual_scale < 0:
+            raise ValueError("residual_scale must be non-negative.")
 
     @classmethod
     def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFNetConfig":
@@ -56,6 +62,8 @@ class GPTFFNetConfig:
             element_refs=raw_config.get("element_refs", None),
             n_readout_layers=int(raw_config.get("n_readout_layers", 3)),
             readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
+            interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
+            residual_scale=float(raw_config.get("residual_scale", 1.0)),
         )
 
     def to_dict(self) -> dict[str, Any]:

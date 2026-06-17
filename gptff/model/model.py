@@ -291,6 +291,8 @@ class GPTFFNet(nn.Module):
                 nbr_fea_len=nbr_fea_len,
                 num_radial=num_radial,
                 num_angular=num_angular,
+                dropout=config.interaction_dropout,
+                residual_scale=config.residual_scale,
             )
             for _ in range(n_layers)
         ])

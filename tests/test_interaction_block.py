@@ -7,7 +7,7 @@ from gptff.model import GPTFFNet, GPTFFNetConfig
 from gptff.model.interaction import InteractionBlock
 
 
-def _cfg(n_layers=1):
+def _cfg(n_layers=1, **kwargs):
     return GPTFFNetConfig(
         node_feature_len=8,
         edge_feature_len=8,
@@ -17,6 +17,7 @@ def _cfg(n_layers=1):
         radial_cutoff=3.0,
         angle_cutoff=3.0,
         cutoff_coeff=5,
+        **kwargs,
     )
 
 
@@ -35,9 +36,13 @@ def test_non_transformer_model_uses_interaction_blocks():
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
+    assert isinstance(model.interactions[0].triplet_atom_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].triplet_edge_norm, nn.LayerNorm)
+    assert isinstance(model.interactions[0].pair_atom_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].pair_edge_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].atom_norm, nn.LayerNorm)
+    assert isinstance(model.interactions[0].atom_edge_norm, nn.LayerNorm)
+    assert model.interactions[0].residual_scale == 1.0
 
 
 def test_interaction_block_returns_finite_atom_and_edge_features():
@@ -88,3 +93,26 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
 
     assert delta.shape == edge_ij.shape
     assert torch.equal(delta, torch.zeros_like(edge_ij))
+
+
+def test_interaction_block_residual_scale_zero_returns_identity():
+    graph = _batch()
+    model = GPTFFNet(_cfg(residual_scale=0.0))
+
+    atom_fea = model.atom_embedding(graph.atom_types)
+    edge_basis = model.edge_rbf(graph.edge_lengths)
+    triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
+    triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
+    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
+
+    atom_out, edge_out = model.interactions[0](
+        atom_fea,
+        edge_ij,
+        graph,
+        edge_basis,
+        triplet_basis_ij,
+        triplet_basis_ik,
+    )
+
+    assert torch.allclose(atom_out, atom_fea)
+    assert torch.allclose(edge_out, edge_ij)
