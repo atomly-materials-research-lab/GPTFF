@@ -13,6 +13,7 @@
         "radial_cutoff": 5.0,
         "angle_cutoff": 3.5,
         "cutoff_coeff": 5,
+        "element_refs": "atomly",
         "n_layers": 3,
         "n_readout_layers": 3,
         "warmup_steps": 0,

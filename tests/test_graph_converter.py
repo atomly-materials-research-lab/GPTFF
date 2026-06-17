@@ -1,7 +1,7 @@
 import numpy as np
 from pymatgen.core import Lattice, Structure
 
-from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
+from gptff.graph import CrystalGraphBatch, CrystalGraphConverter, GraphSample, batch_samples
 
 
 def test_periodic_self_images_are_kept():
@@ -66,3 +66,19 @@ def test_batch_offsets_atom_and_triplet_indices():
     assert batch.edge_index[:, 6:].min().item() == 1
     assert batch.triplet_edge_index[:, :30].max().item() < 6
     assert batch.triplet_edge_index[:, 30:].min().item() >= 6
+
+
+def test_batch_samples_accepts_missing_ref_energy():
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    sample = GraphSample(
+        graph=graph,
+        energy=-1.0,
+        forces=np.zeros((1, 3), dtype=np.float32),
+        stress=np.zeros((3, 3), dtype=np.float32),
+    )
+
+    batch = batch_samples([sample])
+
+    assert batch.energy.tolist() == [-1.0]
+    assert batch.ref_energy is None

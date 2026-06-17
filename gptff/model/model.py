@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
+from gptff.model.element_refs import build_element_ref_tensor
 
 
 class AtomEmbedding(nn.Module):
@@ -257,18 +258,29 @@ class InteractionBlock(nn.Module):
         return atom_fea, edge_ij
 
 
-class AtomWiseReadout(nn.Module):
-    def __init__(self, atom_fea_len):
+class EnergyHead(nn.Module):
+    def __init__(self, atom_fea_len, max_atomic_number=94, element_refs=None):
         super().__init__()
+        self.max_atomic_number = int(max_atomic_number)
         self.swish = nn.SiLU()
         self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
         self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
         self.fc_out = nn.Linear(atom_fea_len, 1)
+        self.register_buffer(
+            "element_refs",
+            build_element_ref_tensor(
+                element_refs,
+                max_atomic_number=self.max_atomic_number,
+            ),
+        )
 
-    def forward(self, atom_fea, atom_batch, num_graphs):
+    def forward(self, atom_fea, atom_types, atom_batch, num_graphs):
         site_energy = self.swish(self.fc1(atom_fea))
         site_energy = self.swish(self.fc2(site_energy))
         site_energy = self.fc_out(site_energy)
+        if self.element_refs is not None:
+            site_energy = site_energy + self.element_refs[atom_types].unsqueeze(-1)
+
         energy = torch.zeros(
             (num_graphs, 1),
             dtype=site_energy.dtype,
@@ -351,6 +363,8 @@ class tModLodaer_t(nn.Module):
         radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
         angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
+        max_atomic_number = getattr(CFG, "max_atomic_number", 94)
+        element_refs = getattr(CFG, "element_refs", None)
 
         self.device = CFG.device
 
@@ -360,6 +374,7 @@ class tModLodaer_t(nn.Module):
         self.num_angular = num_angular
         self.radial_cutoff = radial_cutoff
         self.angle_cutoff = angle_cutoff
+        self.max_atomic_number = max_atomic_number
         self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
         self.triplet_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
@@ -386,7 +401,11 @@ class tModLodaer_t(nn.Module):
         self.norms1 = nn.ModuleList([nn.LayerNorm(atom_fea_len) for _ in range(n_layers)])
         self.norms2 = nn.ModuleList([nn.LayerNorm(atom_fea_len) for _ in range(n_layers)])
 
-        self.readout = AtomWiseReadout(atom_fea_len)
+        self.readout = EnergyHead(
+            atom_fea_len,
+            max_atomic_number=max_atomic_number,
+            element_refs=element_refs,
+        )
 
     def forward(self, graph):
         """
@@ -433,7 +452,7 @@ class tModLodaer_t(nn.Module):
 
             atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
 
-        return self.readout(atom_fea, graph.atom_batch, graph.num_atoms.shape[0])
+        return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
 
 
 class tModLodaer(nn.Module):
@@ -451,6 +470,7 @@ class tModLodaer(nn.Module):
         angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
         max_atomic_number = getattr(CFG, "max_atomic_number", 94)
+        element_refs = getattr(CFG, "element_refs", None)
 
         self.device = CFG.device
 
@@ -476,7 +496,11 @@ class tModLodaer(nn.Module):
             for _ in range(n_layers)
         ])
 
-        self.readout = AtomWiseReadout(atom_fea_len)
+        self.readout = EnergyHead(
+            atom_fea_len,
+            max_atomic_number=max_atomic_number,
+            element_refs=element_refs,
+        )
 
     def forward(self, graph):
         """
@@ -500,4 +524,4 @@ class tModLodaer(nn.Module):
                 triplet_basis_ik,
             )
 
-        return self.readout(atom_fea, graph.atom_batch, graph.num_atoms.shape[0])
+        return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])

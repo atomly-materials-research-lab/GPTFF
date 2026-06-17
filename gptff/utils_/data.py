@@ -31,12 +31,17 @@ class StructureDataset(Dataset):
             row = self.df.iloc[idx]
             structure = Structure.from_dict(ast.literal_eval(row["structure"]))
             graph = self.converter.convert(structure)
+            ref_energy = row["ref_energy"] if "ref_energy" in row.index else None
+            if ref_energy is not None and ref_energy == ref_energy:
+                ref_energy = float(ref_energy)
+            else:
+                ref_energy = None
             return GraphSample(
                 graph=graph,
                 energy=float(row["energy"]),
                 forces=np.asarray(ast.literal_eval(row["forces"]), dtype=np.float32),
                 stress=np.asarray(ast.literal_eval(row["stress"]), dtype=np.float32) * -0.1,
-                ref_energy=float(row["ref_energy"]),
+                ref_energy=ref_energy,
             )
         except Exception as exc:
             raise ValueError(f"Failed to load structure row {idx}.") from exc

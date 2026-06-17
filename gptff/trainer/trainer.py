@@ -65,6 +65,8 @@ class CFG:
     radial_cutoff = js['training'].get('radial_cutoff', 5.0)
     angle_cutoff = js['training'].get('angle_cutoff', 3.5)
     cutoff_coeff = js['training'].get('cutoff_coeff', 5)
+    max_atomic_number = js['training'].get('max_atomic_number', 94)
+    element_refs = js['training'].get('element_refs', None)
     unit_trans = 160.21766208
 
 cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}

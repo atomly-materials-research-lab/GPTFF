@@ -38,7 +38,7 @@ class GraphSample:
     energy: float
     forces: np.ndarray
     stress: np.ndarray
-    ref_energy: float
+    ref_energy: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -203,12 +203,16 @@ def batch_graphs(graphs: Sequence[CrystalGraph]) -> CrystalGraphBatch:
 
 
 def batch_samples(samples: Sequence[GraphSample]) -> CrystalGraphBatch:
+    ref_energies = [sample.ref_energy for sample in samples]
+    if any(ref_energy is None for ref_energy in ref_energies):
+        ref_energies = None
+
     return CrystalGraphBatch.from_graphs(
         [sample.graph for sample in samples],
         energies=[sample.energy for sample in samples],
         forces=[sample.forces for sample in samples],
         stresses=[sample.stress for sample in samples],
-        ref_energies=[sample.ref_energy for sample in samples],
+        ref_energies=ref_energies,
     )
 
 

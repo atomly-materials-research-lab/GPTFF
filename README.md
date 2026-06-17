@@ -161,11 +161,10 @@ struc_data = struc.as_dict()
 
 `fold`: You can specify which fold to be trained and which fold to be validated. If you set fold in config.json is `0`, the the `fold !=0` is training dataset, `fold == 0` would be validation dataset.
 
-`ref_energy`: Reference energy of the structure, 
-For example, the formula of the structure is Li2O4, the ref_energy of Li2O4 is: atom_refs[3] * 2 + atom_refs[8] * 4. `3` and `8` are atomic order of Li and O, `2` and `4` are atom numbers in the structure.
+`ref_energy`: Optional legacy structure-level reference energy. New models should keep elemental reference energies in the model config through `training.element_refs`. For example, set `"element_refs": "atomly"` to use the built-in Atomly reference preset, or provide your own mapping/list.
 
 
-In the model we have pretrained, the `atom_refs` is:
+In the model we have pretrained, the `atom_refs` is available as the built-in `"atomly"` preset:
 
 ```python
 atom_refs = np.array([ 

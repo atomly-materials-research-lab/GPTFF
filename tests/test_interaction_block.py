@@ -29,7 +29,7 @@ def _batch(a_cut=3.0):
         [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
     )
     graph = CrystalGraphConverter(r_cut=3.0, a_cut=a_cut).convert(structure)
-    return CrystalGraphBatch.from_graphs([graph], ref_energies=[0.0]).with_geometry()
+    return CrystalGraphBatch.from_graphs([graph]).with_geometry()
 
 
 def test_non_transformer_model_uses_interaction_blocks():
