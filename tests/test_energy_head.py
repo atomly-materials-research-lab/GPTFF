@@ -3,12 +3,13 @@ import torch
 import pytest
 
 from gptff.graph import CrystalGraph, GraphSample
-from gptff.model.element_refs import (
+from gptff.model.readout import (
+    EnergyHead,
+    EnergyReadoutOutput,
     available_element_ref_presets,
     build_element_ref_tensor,
     fit_element_refs_from_samples,
 )
-from gptff.model.readout import EnergyHead, EnergyReadoutOutput
 
 
 def test_energy_head_is_extensive_for_learned_site_energy():

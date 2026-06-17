@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.embedding import (
+from gptff.model.encoders import (
     AtomEmbedding,
     EdgeEmbedding,
     EdgeModulationProjection,

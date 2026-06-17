@@ -5,12 +5,12 @@ from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.aggregation import (
+from gptff.model.encoders import EdgeModulation, GeometryFeatures
+from gptff.model.layers import (
+    InteractionBlock,
     edge_counts_per_center,
     normalize_aggregation,
 )
-from gptff.model.embedding import EdgeModulation, GeometryFeatures
-from gptff.model.interaction import InteractionBlock
 
 
 def _cfg(n_layers=1, **kwargs):

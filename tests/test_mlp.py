@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from gptff.model.mlp import GatedMLP, MLP
+from gptff.model.layers import GatedMLP, MLP
 
 
 def test_mlp_returns_expected_shape_and_zero_init_output():

@@ -5,11 +5,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 from gptff.model.config import GPTFFNetConfig
-from gptff.model.embedding import (
+from gptff.model.encoders import (
     AtomEmbedding,
     GeometryEmbedding,
 )
-from gptff.model.interaction import EdgeUpdate, InteractionBlock
+from gptff.model.layers import EdgeUpdate, InteractionBlock
 from gptff.model.readout import EnergyHead
 
 

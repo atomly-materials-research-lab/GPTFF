@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from gptff.model.element_refs import fit_element_refs_from_samples
+from gptff.model.readout import fit_element_refs_from_samples
 from gptff.trainer.config import TrainingConfig
 from gptff.utils_.data import (
     StructureDataset,

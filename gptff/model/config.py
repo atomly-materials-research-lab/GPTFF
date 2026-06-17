@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
-from gptff.model.aggregation import validate_aggregation_norm
+from gptff.model.layers import validate_aggregation_norm
 
 
 @dataclass(frozen=True)
