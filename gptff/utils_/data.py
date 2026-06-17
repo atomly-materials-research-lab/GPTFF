@@ -1,9 +1,9 @@
 from __future__ import division, print_function
 
 import ast
-import functools
 import math
-from typing import Any
+from collections import OrderedDict
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -29,9 +29,14 @@ class StructureDataset(Dataset):
         a_cut=3.5,
         numerical_tol=1e-8,
         label_config=None,
+        cache_graphs=False,
+        cache_size: Optional[int] = None,
     ):
         self.df = df.reset_index(drop=True)
         self.label_config = label_config or LabelConfig()
+        self.cache_graphs = bool(cache_graphs)
+        self.cache_size = _normalize_cache_size(cache_size)
+        self._sample_cache = OrderedDict()
         self.converter = CrystalGraphConverter(
             r_cut=r_cut,
             a_cut=a_cut,
@@ -41,8 +46,25 @@ class StructureDataset(Dataset):
     def __len__(self):
         return len(self.df)
 
-    @functools.lru_cache(maxsize=None)
     def __getitem__(self, idx):
+        idx = int(idx)
+        if not self.cache_graphs:
+            return self._load_sample(idx)
+
+        if idx in self._sample_cache:
+            sample = self._sample_cache.pop(idx)
+            self._sample_cache[idx] = sample
+            return sample
+
+        sample = self._load_sample(idx)
+        if self.cache_size != 0:
+            self._sample_cache[idx] = sample
+            if self.cache_size is not None:
+                while len(self._sample_cache) > self.cache_size:
+                    self._sample_cache.popitem(last=False)
+        return sample
+
+    def _load_sample(self, idx):
         try:
             row = self.df.iloc[idx]
             structure = Structure.from_dict(ast.literal_eval(row["structure"]))
@@ -59,6 +81,15 @@ class StructureDataset(Dataset):
 
 def collate_graph_samples(samples):
     return batch_samples(samples)
+
+
+def _normalize_cache_size(cache_size: Optional[int]) -> Optional[int]:
+    if cache_size is None:
+        return None
+    cache_size = int(cache_size)
+    if cache_size < 0:
+        raise ValueError("cache_size must be non-negative or None.")
+    return cache_size
 
 
 def _load_energy(row, label_config: LabelConfig):

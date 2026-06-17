@@ -236,6 +236,8 @@ The file `config.json` includes training settings,
 - force_unit: Unit of `forces` labels in the data section. Currently `"ev_per_ang"`.
 - stress_unit: Unit of `stress` labels in the data section. Supported values are `"gpa"`, `"kbar"`, and `"ev_per_ang3"`.
 - stress_sign: Sign multiplier for stress labels before conversion to GPa.
+- cache_graphs: If true, cache converted structure graphs in each DataLoader worker. Defaults to false.
+- graph_cache_size: Maximum cached graph samples per worker. Use `null` for unlimited cache only when the dataset is small enough.
 - weight_energy: Weight factor of the energy
 - weight_force: Weight factor of the forces
 - weight_stress: Weight factor of the stress

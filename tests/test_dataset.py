@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from pymatgen.core import Lattice, Structure
 
+from gptff.graph import CrystalGraphConverter
 from gptff.utils_.data import StructureDataset
 from gptff.utils_.labels import LabelConfig
 
@@ -45,3 +46,93 @@ def test_structure_dataset_allows_missing_force_and_stress_columns():
     assert sample.energy == -1.0
     assert sample.forces is None
     assert sample.stress is None
+
+
+def test_structure_dataset_does_not_cache_by_default():
+    dataset = StructureDataset(_single_structure_df(), r_cut=2.0, a_cut=2.0)
+    converter = _CountingConverter(r_cut=2.0, a_cut=2.0)
+    dataset.converter = converter
+
+    dataset[0]
+    dataset[0]
+
+    assert converter.calls == 2
+
+
+def test_structure_dataset_caches_samples_when_enabled():
+    dataset = StructureDataset(
+        _single_structure_df(),
+        r_cut=2.0,
+        a_cut=2.0,
+        cache_graphs=True,
+    )
+    converter = _CountingConverter(r_cut=2.0, a_cut=2.0)
+    dataset.converter = converter
+
+    first = dataset[0]
+    second = dataset[0]
+
+    assert converter.calls == 1
+    assert first is second
+
+
+def test_structure_dataset_lru_cache_size_is_enforced():
+    dataset = StructureDataset(
+        _two_structure_df(),
+        r_cut=2.0,
+        a_cut=2.0,
+        cache_graphs=True,
+        cache_size=1,
+    )
+    converter = _CountingConverter(r_cut=2.0, a_cut=2.0)
+    dataset.converter = converter
+
+    dataset[0]
+    dataset[1]
+    dataset[0]
+
+    assert converter.calls == 3
+
+
+def test_structure_dataset_rejects_negative_cache_size():
+    try:
+        StructureDataset(_single_structure_df(), cache_graphs=True, cache_size=-1)
+    except ValueError as exc:
+        assert "cache_size" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for negative cache_size.")
+
+
+class _CountingConverter:
+    def __init__(self, **kwargs):
+        self.converter = CrystalGraphConverter(**kwargs)
+        self.calls = 0
+
+    def convert(self, structure):
+        self.calls += 1
+        return self.converter.convert(structure)
+
+
+def _single_structure_df():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    return pd.DataFrame([
+        {
+            "structure": repr(structure.as_dict()),
+            "energy": -1.0,
+        }
+    ])
+
+
+def _two_structure_df():
+    structure_a = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    structure_b = Structure(Lattice.cubic(3.0), ["Cl"], [[0.0, 0.0, 0.0]])
+    return pd.DataFrame([
+        {
+            "structure": repr(structure_a.as_dict()),
+            "energy": -1.0,
+        },
+        {
+            "structure": repr(structure_b.as_dict()),
+            "energy": -2.0,
+        },
+    ])

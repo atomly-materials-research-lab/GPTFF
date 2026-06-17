@@ -41,6 +41,8 @@ class TrainingConfig:
     force_unit: str
     stress_unit: str
     stress_sign: float
+    cache_graphs: bool
+    graph_cache_size: Optional[int]
     num_workers: int
     lr: float
     weight_decay: float
@@ -92,6 +94,8 @@ class TrainingConfig:
             force_unit=str(data.get("force_unit", "ev_per_ang")),
             stress_unit=str(data.get("stress_unit", "kbar")),
             stress_sign=float(data.get("stress_sign", -1.0)),
+            cache_graphs=bool(data.get("cache_graphs", False)),
+            graph_cache_size=_optional_int(data.get("graph_cache_size", None)),
             num_workers=int(training["workers"]),
             lr=float(training["learning_rate"]),
             weight_decay=float(training["weight_decay"]),
@@ -250,6 +254,12 @@ def select_validation_metric(metrics: EpochMetrics) -> float:
     return float("inf")
 
 
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Graph-based Pretrained Transformer Force Field.")
     parser.add_argument("config", metavar="OPTIONS", help="Configs for training")
@@ -276,12 +286,16 @@ def build_datasets(config: TrainingConfig) -> Tuple[StructureDataset, StructureD
         r_cut=config.radial_cutoff,
         a_cut=config.angle_cutoff,
         label_config=label_config,
+        cache_graphs=config.cache_graphs,
+        cache_size=config.graph_cache_size,
     )
     val_dataset = StructureDataset(
         df_val,
         r_cut=config.radial_cutoff,
         a_cut=config.angle_cutoff,
         label_config=label_config,
+        cache_graphs=config.cache_graphs,
+        cache_size=config.graph_cache_size,
     )
     return train_dataset, val_dataset
 

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
@@ -10,6 +11,7 @@ from gptff.model import GPTFFNetConfig
 from gptff.trainer.trainer import (
     TrainingConfig,
     apply_fitted_element_refs,
+    build_datasets,
     compute_batch_loss,
     load_training_checkpoint,
     resolve_checkpoint_path,
@@ -27,6 +29,8 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.force_unit == "ev_per_ang"
     assert config.stress_unit == "kbar"
     assert config.stress_sign == pytest.approx(-1.0)
+    assert config.cache_graphs is True
+    assert config.graph_cache_size == 16
     assert config.element_refs == "atomly"
     assert config.n_readout_layers == 4
     assert config.readout_zero_init is True
@@ -46,6 +50,29 @@ def test_training_config_builds_label_config_from_data_fields():
     assert label_config.force_unit == "ev_per_ang"
     assert label_config.stress_unit == "kbar"
     assert label_config.stress_sign == pytest.approx(-1.0)
+
+
+def test_training_config_disables_graph_cache_by_default():
+    raw_config = _raw_config()
+    raw_config["data"].pop("cache_graphs")
+    raw_config["data"].pop("graph_cache_size")
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.cache_graphs is False
+    assert config.graph_cache_size is None
+
+
+def test_build_datasets_passes_graph_cache_config(monkeypatch):
+    config = TrainingConfig.from_dict(_raw_config())
+    monkeypatch.setattr("gptff.trainer.trainer.read_data", lambda _: _training_df())
+
+    train_dataset, val_dataset = build_datasets(config)
+
+    assert train_dataset.cache_graphs is True
+    assert train_dataset.cache_size == 16
+    assert val_dataset.cache_graphs is True
+    assert val_dataset.cache_size == 16
 
 
 def test_training_config_builds_model_config_only_from_model_fields():
@@ -114,6 +141,8 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_config"]["residual_scale"] == pytest.approx(0.5)
     assert state["model_config"]["aggregation_norm"] == "sqrt"
     assert state["training_config"]["batch_size"] == 4
+    assert state["training_config"]["cache_graphs"] is True
+    assert state["training_config"]["graph_cache_size"] == 16
     assert state["label_config"]["stress_unit"] == "kbar"
     assert "device" not in state["model_config"]
     assert state["cfg"]["batch_size"] == 4
@@ -168,6 +197,8 @@ def test_load_training_checkpoint_restores_model_and_optimizer(tmp_path):
     assert checkpoint.epoch == 3
     assert checkpoint.best_mae_error == pytest.approx(0.2)
     assert checkpoint.training_config["batch_size"] == 4
+    assert checkpoint.training_config["cache_graphs"] is True
+    assert checkpoint.training_config["graph_cache_size"] == 16
     assert checkpoint.model_config["n_readout_layers"] == 4
     assert checkpoint.label_config["stress_unit"] == "kbar"
     assert checkpoint.model_config["aggregation_norm"] == "sqrt"
@@ -255,6 +286,18 @@ def _energy_only_batch():
     return CrystalGraphBatch.from_graphs([graph], energies=[-1.0])
 
 
+def _training_df():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    row = {
+        "structure": repr(structure.as_dict()),
+        "energy": -1.0,
+        "fold": 0,
+    }
+    train_row = dict(row)
+    train_row["fold"] = 1
+    return pd.DataFrame([row, train_row])
+
+
 def _sample(atom_types, energy):
     return SimpleNamespace(
         graph=SimpleNamespace(atom_types=np.asarray(atom_types, dtype=np.int64)),
@@ -304,5 +347,7 @@ def _raw_config():
             "force_unit": "ev_per_ang",
             "stress_unit": "kbar",
             "stress_sign": -1.0,
+            "cache_graphs": True,
+            "graph_cache_size": 16,
         },
     }
