@@ -13,6 +13,11 @@ import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
+from gptff.data import (
+    apply_fitted_element_refs,
+    build_datasets,
+    build_loaders,
+)
 from gptff.model import GPTFFNet, tModLodaer_t
 from gptff.trainer.checkpoint import (
     LoadedCheckpoint,
@@ -21,12 +26,6 @@ from gptff.trainer.checkpoint import (
     save_checkpoint,
 )
 from gptff.trainer.config import TrainingConfig, load_config
-from gptff.trainer.data import (
-    apply_fitted_element_refs,
-    build_datasets,
-    build_loaders,
-    read_data,
-)
 from gptff.trainer.loss import (
     BatchLoss,
     compute_batch_loss,
@@ -34,7 +33,7 @@ from gptff.trainer.loss import (
     mae,
     validate_required_labels,
 )
-from gptff.utils_.data import CosineAnnealingWarmupRestarts
+from gptff.trainer.scheduler import CosineAnnealingWarmupRestarts
 
 
 @dataclass

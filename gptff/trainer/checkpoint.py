@@ -9,7 +9,7 @@ import torch
 from torch.cuda.amp import GradScaler
 
 from gptff.trainer.config import TrainingConfig
-from gptff.utils_.data import CosineAnnealingWarmupRestarts
+from gptff.trainer.scheduler import CosineAnnealingWarmupRestarts
 
 
 @dataclass(frozen=True)

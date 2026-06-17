@@ -7,13 +7,12 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from gptff.model.readout import fit_element_refs_from_samples
-from gptff.trainer.config import TrainingConfig
-from gptff.utils_.data import (
+from gptff.data.dataset import (
     StructureDataset,
     collate_graph_samples,
     validate_dataframe_schema,
 )
+from gptff.model.readout import fit_element_refs_from_samples
 
 
 def read_data(config: TrainingConfig) -> pd.DataFrame:
