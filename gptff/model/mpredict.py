@@ -6,7 +6,8 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet, GPTFFNetConfig, tModLodaer_t
+from gptff.model.config import GPTFFNetConfig
+from gptff.model.model import GPTFFNet, tModLodaer_t
 from gptff.model.prediction import predict_energy_forces_stress
 from gptff.utils_.labels import stress_gpa_to_ase_voigt
 

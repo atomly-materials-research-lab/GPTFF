@@ -2,8 +2,7 @@ import numpy as np
 import torch
 from ase import Atoms
 
-from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.mpredict import ASECalculator
+from gptff.model import ASECalculator, GPTFFNet, GPTFFNetConfig
 from gptff.utils_.labels import EV_PER_ANG3_TO_GPA
 
 

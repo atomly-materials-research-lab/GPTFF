@@ -15,7 +15,6 @@ dependencies = [
     "pymatgen",
     "pandas",
     "tqdm",
-    "pandas",
     "scikit-learn",
     "scipy",
 ]

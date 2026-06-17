@@ -18,10 +18,10 @@ pip install .
 
 ## Usage
 
-**Fast Energy(eV), Force(eV/Å), Stress(GPa) calculation:**
+**Fast Energy(eV), Force(eV/Å), Stress(eV/Å^3, ASE Voigt) calculation:**
 
 ```python
-from gptff.model.mpredict import ASECalculator
+from gptff.model import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
@@ -36,7 +36,7 @@ atoms.set_calculator(p)
 
 energy = atoms.get_potential_energy() # unit (eV)
 forces = atoms.get_forces() # unit (eV/Å)
-stress = atoms.get_stress() # unit (GPa)
+stress = atoms.get_stress() # unit (eV/Å^3), Voigt order: xx, yy, zz, yz, xz, xy
 ```
 
 **Structure Optimization:**
@@ -44,7 +44,7 @@ stress = atoms.get_stress() # unit (GPa)
 Lattice vectors would be changed
 
 ```python
-from gptff.model.mpredict import ASECalculator
+from gptff.model import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
@@ -67,10 +67,10 @@ FIRE(optimizer).run(fmax=0.01, steps=100)
 
 ```
 
-Lattice vectors would be not change, only atomic positions would be optimized
+Lattice vectors would not change; only atomic positions would be optimized.
 
 ```python
-from gptff.model.mpredict import ASECalculator
+from gptff.model import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
@@ -95,7 +95,7 @@ optimizer.run(fmax=0.01, steps=1000)
 We will support `LAMMPS` with `GPTFF` later.
 
 ```python
-from gptff.model.mpredict import ASECalculator
+from gptff.model import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase import Atoms, units
@@ -141,7 +141,7 @@ gptff_trainer config.json
 
 If you want to pretrain or finetune the force field based on your own dataset, you can prepare your own dataset as below:
 
-The dataset must be store in `.csv` format file, there are several columns:
+The dataset must be stored in a `.csv` file with these columns:
 
 `struct_id`: Unique structure id, e.g. 0, 1, 2, ..
 
@@ -149,7 +149,7 @@ The dataset must be store in `.csv` format file, there are several columns:
 
 `forces`: The forces of each atom (eV/Å)
 
-`stress`: The stress of the structure (kBar, align with VASP stress output directly)
+`stress`: The stress of the structure. The default `config.json` assumes VASP-style stress in kBar with `stress_sign = -1.0`, and converts labels internally to GPa for training.
 
 `structure`: dict format of the structure. 
 
@@ -159,9 +159,18 @@ struc = Structure.from_file('POSCAR')
 struc_data = struc.as_dict()
 ```
 
-`fold`: You can specify which fold to be trained and which fold to be validated. If you set fold in config.json is `0`, the the `fold !=0` is training dataset, `fold == 0` would be validation dataset.
+`fold`: You can specify which fold is used for validation. If `val_fold` in `config.json` is `0`, rows with `fold != 0` are used for training and rows with `fold == 0` are used for validation.
 
 Elemental reference energies are configured through `training.element_refs`, not stored as a dataset column. Set `"element_refs": "atomly"` to use the built-in Atomly reference preset, provide your own mapping/list, or set `"fit_element_refs": true` to fit references from the training split.
+
+Label units are configured in the `data` section of `config.json`:
+
+- `energy_unit`: Currently supports `"ev"`.
+- `force_unit`: Currently supports `"ev_per_ang"`.
+- `stress_unit`: Supports `"gpa"`, `"kbar"`, and `"ev_per_ang3"`.
+- `stress_sign`: Multiplier applied before stress is converted to GPa. Use `-1.0` for VASP-style stress with the default GPTFF convention.
+
+During ASE inference, `atoms.get_stress()` follows the ASE convention and returns a six-component stress vector in eV/Å^3, even though the model's internal stress is computed in GPa.
 
 
 The built-in `"atomly"` reference preset is:
@@ -203,14 +212,29 @@ The file `config.json` includes training settings,
 - batch_size: batch size for training, the number of structures used in one step(batch)
 - node_feature_len: The size of the node(atom) feature length
 - edge_feature_len: The size of the edge(bond) feature length
-- n_layers: THe number of layers of GPTFF model
+- num_radial: Number of radial basis functions
+- num_angular: Number of Fourier angular basis frequencies
+- radial_cutoff: Pair graph cutoff radius
+- angle_cutoff: Three-body angle cutoff radius
+- cutoff_coeff: Polynomial cutoff envelope exponent
+- n_layers: The number of layers of GPTFF model
+- n_readout_layers: Number of linear layers in the atom-wise energy readout
+- readout_zero_init: If true, initialize the learned residual energy output to zero
+- interaction_dropout: Dropout probability inside non-transformer interaction blocks
+- residual_scale: Scale factor applied to interaction residual updates
 - device: `cpu` or `cuda`
 - output_dir: Directory for checkpoints and validation history
 - val_fold: Label validation data during training
+- resume: If true, restore model, optimizer, scheduler, scaler, epoch, and best validation metric from a checkpoint
+- checkpoint_path: Checkpoint path used when `resume` is true. If null, `output_dir/curr_checkpoint.pth` is used.
 - transformer_activate: If activate `transformer` block or not
 - element_refs: Elemental reference energies. Use `"atomly"`, `null`, a mapping, or a list.
 - fit_element_refs: If true, fit elemental reference energies from the training split. Do not set this together with `element_refs`.
 - element_ref_ridge: Ridge regularization used when fitting elemental reference energies.
+- energy_unit: Unit of `energy` labels in the data section. Currently `"ev"`.
+- force_unit: Unit of `forces` labels in the data section. Currently `"ev_per_ang"`.
+- stress_unit: Unit of `stress` labels in the data section. Supported values are `"gpa"`, `"kbar"`, and `"ev_per_ang3"`.
+- stress_sign: Sign multiplier for stress labels before conversion to GPa.
 - weight_energy: Weight factor of the energy
 - weight_force: Weight factor of the forces
 - weight_stress: Weight factor of the stress, if there's not stress data, please set it to `0`
