@@ -14,6 +14,8 @@
         "angle_cutoff": 3.5,
         "cutoff_coeff": 5,
         "element_refs": "atomly",
+        "fit_element_refs": false,
+        "element_ref_ridge": 0.0,
         "n_layers": 3,
         "n_readout_layers": 3,
         "warmup_steps": 0,

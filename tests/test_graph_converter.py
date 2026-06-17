@@ -68,7 +68,7 @@ def test_batch_offsets_atom_and_triplet_indices():
     assert batch.triplet_edge_index[:, 30:].min().item() >= 6
 
 
-def test_batch_samples_accepts_missing_ref_energy():
+def test_batch_samples_collates_labels():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
     graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
     sample = GraphSample(
@@ -81,4 +81,5 @@ def test_batch_samples_accepts_missing_ref_energy():
     batch = batch_samples([sample])
 
     assert batch.energy.tolist() == [-1.0]
-    assert batch.ref_energy is None
+    assert batch.forces.shape == (1, 3)
+    assert batch.stress.shape == (1, 3, 3)

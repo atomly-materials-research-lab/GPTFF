@@ -42,14 +42,14 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
     assert torch.isfinite(stress).all()
 
 
-def test_prediction_uses_model_total_energy_without_external_ref_energy():
+def test_prediction_uses_model_total_energy():
     structure = Structure(
         Lattice.cubic(3.0),
         ["Na", "Cl"],
         [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
     )
     graph = CrystalGraphConverter(r_cut=3.0, a_cut=3.0).convert(structure)
-    batch = CrystalGraphBatch.from_graphs([graph], ref_energies=[123.0])
+    batch = CrystalGraphBatch.from_graphs([graph])
 
     energy, forces, stress = predict_energy_forces_stress(
         GeometryEnergyModel(),

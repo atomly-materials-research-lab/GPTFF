@@ -23,6 +23,7 @@ from joblib import Parallel, delayed
 from gptff.model.prediction import predict_energy_forces_stress
 from gptff.utils_.data import StructureDataset, collate_graph_samples, CosineAnnealingWarmupRestarts
 from gptff.model.model import tModLodaer, tModLodaer_t
+from gptff.model.element_refs import fit_element_refs_from_samples
 from torch.cuda.amp import autocast, GradScaler
 from datetime import datetime
 import json
@@ -67,9 +68,9 @@ class CFG:
     cutoff_coeff = js['training'].get('cutoff_coeff', 5)
     max_atomic_number = js['training'].get('max_atomic_number', 94)
     element_refs = js['training'].get('element_refs', None)
+    fit_element_refs = js['training'].get('fit_element_refs', False)
+    element_ref_ridge = js['training'].get('element_ref_ridge', 0.0)
     unit_trans = 160.21766208
-
-cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}
 
 # Read data
 
@@ -88,6 +89,18 @@ val_dataset = StructureDataset(
     r_cut=CFG.radial_cutoff,
     a_cut=CFG.angle_cutoff,
 )
+
+if CFG.fit_element_refs:
+    if CFG.element_refs is not None:
+        raise ValueError("Set either element_refs or fit_element_refs, not both.")
+    print("Fitting element_refs from the training dataset.")
+    CFG.element_refs = fit_element_refs_from_samples(
+        trn_dataset,
+        max_atomic_number=CFG.max_atomic_number,
+        ridge=CFG.element_ref_ridge,
+    )
+
+cfg_args = {k: v for k, v in CFG.__dict__.items() if not k.startswith("__") and k not in {"split", "config"}}
 
 train_loader = DataLoader(trn_dataset, batch_size=CFG.batch_size,
                               num_workers=CFG.num_workers,

@@ -135,6 +135,77 @@ def build_element_ref_tensor(
     return _build_from_sequence(element_refs, max_atomic_number, dtype=dtype)
 
 
+def fit_element_refs_from_samples(
+    samples,
+    max_atomic_number: int,
+    *,
+    ridge: float = 0.0,
+) -> dict[str, float]:
+    if max_atomic_number < 1:
+        raise ValueError("max_atomic_number must be positive.")
+    if ridge < 0:
+        raise ValueError("ridge must be non-negative.")
+
+    compositions = []
+    energies = []
+    observed = torch.zeros(max_atomic_number, dtype=torch.bool)
+
+    for sample in _iter_samples(samples):
+        atom_types = torch.as_tensor(sample.graph.atom_types, dtype=torch.long)
+        if atom_types.numel() == 0:
+            raise ValueError("Cannot fit element_refs from an empty structure.")
+        if torch.any((atom_types < 1) | (atom_types > max_atomic_number)):
+            raise ValueError(
+                "Atomic numbers must be in the range "
+                f"[1, {max_atomic_number}] when fitting element_refs."
+            )
+
+        composition = torch.bincount(
+            atom_types,
+            minlength=max_atomic_number + 1,
+        )[1:].to(torch.float64)
+        compositions.append(composition)
+        energies.append(float(sample.energy))
+        observed |= composition > 0
+
+    if not compositions:
+        raise ValueError("Cannot fit element_refs from an empty sample collection.")
+
+    composition_matrix = torch.stack(compositions, dim=0)
+    target_energy = torch.tensor(energies, dtype=torch.float64)
+    active_matrix = composition_matrix[:, observed]
+    if active_matrix.shape[1] == 0:
+        raise ValueError("No elements were observed while fitting element_refs.")
+
+    if ridge == 0:
+        solution = torch.linalg.lstsq(
+            active_matrix,
+            target_energy.unsqueeze(-1),
+        ).solution.squeeze(-1)
+    else:
+        gram = active_matrix.T @ active_matrix
+        regularizer = ridge * torch.eye(gram.shape[0], dtype=gram.dtype)
+        solution = torch.linalg.solve(
+            gram + regularizer,
+            active_matrix.T @ target_energy,
+        )
+
+    refs = torch.zeros(max_atomic_number, dtype=torch.float64)
+    refs[observed] = solution
+    return {
+        str(atomic_number): float(refs[atomic_number - 1].item())
+        for atomic_number in torch.nonzero(observed, as_tuple=False).flatten().add(1).tolist()
+    }
+
+
+def _iter_samples(samples):
+    if hasattr(samples, "__len__") and hasattr(samples, "__getitem__"):
+        for idx in range(len(samples)):
+            yield samples[idx]
+    else:
+        yield from samples
+
+
 def _build_from_preset(
     preset_name: str,
     max_atomic_number: int,

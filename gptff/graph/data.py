@@ -38,7 +38,6 @@ class GraphSample:
     energy: float
     forces: np.ndarray
     stress: np.ndarray
-    ref_energy: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,6 @@ class CrystalGraphBatch:
     energy: Optional[torch.Tensor] = None
     forces: Optional[torch.Tensor] = None
     stress: Optional[torch.Tensor] = None
-    ref_energy: Optional[torch.Tensor] = None
 
     @classmethod
     def from_graphs(
@@ -68,7 +66,6 @@ class CrystalGraphBatch:
         energies: Optional[Sequence[float]] = None,
         forces: Optional[Sequence[np.ndarray]] = None,
         stresses: Optional[Sequence[np.ndarray]] = None,
-        ref_energies: Optional[Sequence[float]] = None,
     ) -> "CrystalGraphBatch":
         if len(graphs) == 0:
             raise ValueError("Cannot batch an empty graph list.")
@@ -115,7 +112,6 @@ class CrystalGraphBatch:
             energy=_optional_float_tensor(energies),
             forces=_optional_concat_tensor(forces),
             stress=_optional_stack_tensor(stresses),
-            ref_energy=_optional_float_tensor(ref_energies),
         )
 
     def to(self, device: torch.device | str) -> "CrystalGraphBatch":
@@ -203,16 +199,11 @@ def batch_graphs(graphs: Sequence[CrystalGraph]) -> CrystalGraphBatch:
 
 
 def batch_samples(samples: Sequence[GraphSample]) -> CrystalGraphBatch:
-    ref_energies = [sample.ref_energy for sample in samples]
-    if any(ref_energy is None for ref_energy in ref_energies):
-        ref_energies = None
-
     return CrystalGraphBatch.from_graphs(
         [sample.graph for sample in samples],
         energies=[sample.energy for sample in samples],
         forces=[sample.forces for sample in samples],
         stresses=[sample.stress for sample in samples],
-        ref_energies=ref_energies,
     )
 
 

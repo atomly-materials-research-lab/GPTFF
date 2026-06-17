@@ -161,10 +161,10 @@ struc_data = struc.as_dict()
 
 `fold`: You can specify which fold to be trained and which fold to be validated. If you set fold in config.json is `0`, the the `fold !=0` is training dataset, `fold == 0` would be validation dataset.
 
-`ref_energy`: Optional legacy structure-level reference energy. New models should keep elemental reference energies in the model config through `training.element_refs`. For example, set `"element_refs": "atomly"` to use the built-in Atomly reference preset, or provide your own mapping/list.
+Elemental reference energies are configured through `training.element_refs`, not stored as a dataset column. Set `"element_refs": "atomly"` to use the built-in Atomly reference preset, provide your own mapping/list, or set `"fit_element_refs": true` to fit references from the training split.
 
 
-In the model we have pretrained, the `atom_refs` is available as the built-in `"atomly"` preset:
+The built-in `"atomly"` reference preset is:
 
 ```python
 atom_refs = np.array([ 
@@ -194,8 +194,6 @@ atom_refs = np.array([
        -1.43116273e+01, -1.47003999e+01, -1.54726487e+01])
 ```
 
-Or you can fit you own `atom_refs`.
-
 ## Training setting
 
 The file `config.json` includes training settings, 
@@ -209,6 +207,9 @@ The file `config.json` includes training settings,
 - device: `cpu` or `cuda`
 - val_fold: Label validation data during training
 - transformer_activate: If activate `transformer` block or not
+- element_refs: Elemental reference energies. Use `"atomly"`, `null`, a mapping, or a list.
+- fit_element_refs: If true, fit elemental reference energies from the training split. Do not set this together with `element_refs`.
+- element_ref_ridge: Ridge regularization used when fitting elemental reference energies.
 - weight_energy: Weight factor of the energy
 - weight_force: Weight factor of the forces
 - weight_stress: Weight factor of the stress, if there's not stress data, please set it to `0`
