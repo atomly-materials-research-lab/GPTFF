@@ -1,7 +1,17 @@
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
 from gptff.model.element_refs import build_element_ref_tensor
+
+
+@dataclass(frozen=True)
+class EnergyReadoutOutput:
+    energy: torch.Tensor
+    site_energy: torch.Tensor
+    residual_site_energy: torch.Tensor
+    reference_site_energy: torch.Tensor
 
 
 class EnergyHead(nn.Module):
@@ -39,14 +49,39 @@ class EnergyHead(nn.Module):
             ),
         )
 
-    def forward(self, atom_fea, atom_types, atom_batch, num_graphs):
-        site_energy = self.output_layer(self.hidden_mlp(atom_fea))
+    def residual_site_energy(self, atom_fea):
+        return self.output_layer(self.hidden_mlp(atom_fea))
+
+    def reference_site_energy(self, atom_types, reference):
         if self.element_refs is not None:
-            site_energy = site_energy + self.element_refs[atom_types].unsqueeze(-1)
+            return self.element_refs[atom_types].unsqueeze(-1).to(
+                dtype=reference.dtype,
+                device=reference.device,
+            )
+        return torch.zeros_like(reference)
+
+    def forward_with_site_energies(self, atom_fea, atom_types, atom_batch, num_graphs):
+        residual_site_energy = self.residual_site_energy(atom_fea)
+        reference_site_energy = self.reference_site_energy(atom_types, residual_site_energy)
+        site_energy = residual_site_energy + reference_site_energy
 
         energy = torch.zeros(
             (num_graphs, 1),
             dtype=site_energy.dtype,
             device=site_energy.device,
         )
-        return torch.index_add(energy, 0, atom_batch, site_energy)
+        energy = torch.index_add(energy, 0, atom_batch, site_energy)
+        return EnergyReadoutOutput(
+            energy=energy,
+            site_energy=site_energy,
+            residual_site_energy=residual_site_energy,
+            reference_site_energy=reference_site_energy,
+        )
+
+    def forward(self, atom_fea, atom_types, atom_batch, num_graphs):
+        return self.forward_with_site_energies(
+            atom_fea,
+            atom_types,
+            atom_batch,
+            num_graphs,
+        ).energy
