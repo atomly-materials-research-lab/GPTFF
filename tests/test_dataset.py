@@ -1,9 +1,12 @@
+import json
+
 import numpy as np
 import pandas as pd
+import pytest
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphConverter
-from gptff.utils_.data import StructureDataset
+from gptff.utils_.data import StructureDataset, validate_dataframe_schema
 from gptff.utils_.labels import LabelConfig
 
 
@@ -46,6 +49,107 @@ def test_structure_dataset_allows_missing_force_and_stress_columns():
     assert sample.energy == -1.0
     assert sample.forces is None
     assert sample.stress is None
+
+
+def test_structure_dataset_accepts_json_structure_strings():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    df = pd.DataFrame([
+        {
+            "structure": json.dumps(structure.as_dict()),
+            "energy": -1.0,
+        }
+    ])
+    dataset = StructureDataset(df, r_cut=2.0, a_cut=2.0)
+
+    sample = dataset[0]
+
+    assert sample.graph.num_atoms == 1
+    assert sample.energy == -1.0
+
+
+def test_structure_dataset_accepts_structure_dicts():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    df = pd.DataFrame([
+        {
+            "structure": structure.as_dict(),
+            "energy": -1.0,
+        }
+    ])
+    dataset = StructureDataset(df, r_cut=2.0, a_cut=2.0)
+
+    sample = dataset[0]
+
+    assert sample.graph.num_atoms == 1
+    assert sample.energy == -1.0
+
+
+def test_structure_dataset_converts_voigt_stress_to_matrix():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    df = pd.DataFrame([
+        {
+            "structure": repr(structure.as_dict()),
+            "energy": -1.0,
+            "stress": repr([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        }
+    ])
+    dataset = StructureDataset(
+        df,
+        r_cut=2.0,
+        a_cut=2.0,
+        label_config=LabelConfig(stress_unit="gpa", stress_sign=1.0),
+    )
+
+    sample = dataset[0]
+
+    assert np.allclose(
+        sample.stress,
+        np.asarray(
+            [
+                [1.0, 6.0, 5.0],
+                [6.0, 2.0, 4.0],
+                [5.0, 4.0, 3.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_validate_dataframe_schema_requires_enabled_label_columns():
+    df = _single_structure_df()
+
+    with pytest.raises(ValueError, match="forces"):
+        validate_dataframe_schema(
+            df,
+            LabelConfig(),
+            require_energy=True,
+            require_forces=True,
+        )
+
+
+def test_validate_dataframe_schema_rejects_force_shape_mismatch():
+    df = _single_structure_df()
+    df["forces"] = [repr([[0.0, 0.0]])]
+
+    with pytest.raises(ValueError, match="forces"):
+        validate_dataframe_schema(
+            df,
+            LabelConfig(),
+            require_energy=True,
+            require_forces=True,
+        )
+
+
+def test_validate_dataframe_schema_rejects_bad_stress_shape():
+    df = _single_structure_df()
+    df["stress"] = [repr([1.0, 2.0, 3.0])]
+
+    with pytest.raises(ValueError, match="stress"):
+        validate_dataframe_schema(
+            df,
+            LabelConfig(),
+            require_energy=True,
+            require_stress=True,
+        )
 
 
 def test_structure_dataset_does_not_cache_by_default():

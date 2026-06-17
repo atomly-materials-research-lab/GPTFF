@@ -246,6 +246,8 @@ Label columns are required only when their corresponding loss weight is positive
 For energy-only data, set `weight_force` and `weight_stress` to `0`.
 For energy-force data without stress, set `weight_stress` to `0`.
 Within one batch, each enabled label type must be present for every sample.
+The `structure` column may contain a pymatgen structure dictionary, a JSON string, or a Python literal dictionary string.
+Forces must have shape `(num_atoms, 3)`, and stress may be a `(3, 3)` matrix or a Voigt 6-vector ordered as `xx, yy, zz, yz, xz, xy`.
 
 ## Reference
 

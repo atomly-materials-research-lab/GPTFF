@@ -75,6 +75,15 @@ def test_build_datasets_passes_graph_cache_config(monkeypatch):
     assert val_dataset.cache_size == 16
 
 
+def test_build_datasets_validates_required_labels_before_training(monkeypatch):
+    config = TrainingConfig.from_dict(_raw_config())
+    df = _training_df().drop(columns=["forces"])
+    monkeypatch.setattr("gptff.trainer.trainer.read_data", lambda _: df)
+
+    with pytest.raises(ValueError, match="forces"):
+        build_datasets(config)
+
+
 def test_training_config_builds_model_config_only_from_model_fields():
     config = TrainingConfig.from_dict(_raw_config())
 
@@ -291,6 +300,8 @@ def _training_df():
     row = {
         "structure": repr(structure.as_dict()),
         "energy": -1.0,
+        "forces": repr([[0.0, 0.0, 0.0]]),
+        "stress": repr(np.eye(3).tolist()),
         "fold": 0,
     }
     train_row = dict(row)

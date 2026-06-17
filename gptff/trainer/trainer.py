@@ -24,6 +24,7 @@ from gptff.utils_.data import (
     CosineAnnealingWarmupRestarts,
     StructureDataset,
     collate_graph_samples,
+    validate_dataframe_schema,
 )
 from gptff.utils_.labels import LabelConfig
 
@@ -278,9 +279,18 @@ def read_data(config: TrainingConfig) -> pd.DataFrame:
 
 def build_datasets(config: TrainingConfig) -> Tuple[StructureDataset, StructureDataset]:
     df = read_data(config)
+    if "fold" not in df.columns:
+        raise ValueError("Dataframe must contain a 'fold' column.")
+    label_config = config.to_label_config()
+    validate_dataframe_schema(
+        df,
+        label_config,
+        require_energy=config.w1 > 0.0,
+        require_forces=config.w2 > 0.0,
+        require_stress=config.w3 > 0.0,
+    )
     df_train = df.loc[df["fold"] != config.val_fold].reset_index(drop=True)
     df_val = df.loc[df["fold"] == config.val_fold].reset_index(drop=True)
-    label_config = config.to_label_config()
     train_dataset = StructureDataset(
         df_train,
         r_cut=config.radial_cutoff,
