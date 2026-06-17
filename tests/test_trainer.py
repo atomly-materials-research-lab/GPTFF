@@ -65,7 +65,7 @@ def test_training_config_disables_graph_cache_by_default():
 
 def test_build_datasets_passes_graph_cache_config(monkeypatch):
     config = TrainingConfig.from_dict(_raw_config())
-    monkeypatch.setattr("gptff.trainer.trainer.read_data", lambda _: _training_df())
+    monkeypatch.setattr("gptff.trainer.data.read_data", lambda _: _training_df())
 
     train_dataset, val_dataset = build_datasets(config)
 
@@ -78,7 +78,7 @@ def test_build_datasets_passes_graph_cache_config(monkeypatch):
 def test_build_datasets_validates_required_labels_before_training(monkeypatch):
     config = TrainingConfig.from_dict(_raw_config())
     df = _training_df().drop(columns=["forces"])
-    monkeypatch.setattr("gptff.trainer.trainer.read_data", lambda _: df)
+    monkeypatch.setattr("gptff.trainer.data.read_data", lambda _: df)
 
     with pytest.raises(ValueError, match="forces"):
         build_datasets(config)
