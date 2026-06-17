@@ -44,6 +44,15 @@ class EdgeModulationProjection(nn.Module):
         )
 
 
+class TripletModulationProjection(nn.Module):
+    def __init__(self, nbr_fea_len, num_radial):
+        super().__init__()
+        self.triplet_weight = nn.Linear(num_radial, nbr_fea_len, bias=False)
+
+    def forward(self, angle_edge_basis):
+        return self.triplet_weight(angle_edge_basis)
+
+
 class EdgeEmbedding(nn.Module):
     def __init__(self, nbr_fea_len, num_radial, normalize=True):
         super().__init__()

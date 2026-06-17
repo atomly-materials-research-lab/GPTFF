@@ -5,7 +5,12 @@ from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 from gptff.model.config import GPTFFNetConfig
-from gptff.model.embedding import AtomEmbedding, EdgeEmbedding, EdgeModulationProjection
+from gptff.model.embedding import (
+    AtomEmbedding,
+    EdgeEmbedding,
+    EdgeModulationProjection,
+    TripletModulationProjection,
+)
 from gptff.model.interaction import EdgeUpdate, InteractionBlock
 from gptff.model.readout import EnergyHead
 
@@ -283,7 +288,9 @@ class GPTFFNet(nn.Module):
         self.atom_embedding = AtomEmbedding(atom_fea_len, max_atomic_number=max_atomic_number)
         self.edge_embedding = EdgeEmbedding(nbr_fea_len, num_radial)
         self.edge_modulation = EdgeModulationProjection(atom_fea_len, nbr_fea_len, num_radial)
+        self.triplet_modulation = TripletModulationProjection(nbr_fea_len, num_radial)
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
+        self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
 
         self.interactions = nn.ModuleList([
             InteractionBlock(
@@ -312,7 +319,9 @@ class GPTFFNet(nn.Module):
 
         atom_fea = self.atom_embedding(graph.atom_types)
         edge_basis = self.edge_rbf(graph.edge_lengths)
+        angle_edge_basis = self.angle_edge_rbf(graph.edge_lengths)
         edge_modulation = self.edge_modulation(edge_basis)
+        triplet_modulation = self.triplet_modulation(angle_edge_basis)
         edge_ij = self.edge_embedding(edge_basis)
         
         for interaction in self.interactions:
@@ -321,6 +330,7 @@ class GPTFFNet(nn.Module):
                 edge_ij,
                 graph,
                 edge_modulation,
+                triplet_modulation,
             )
 
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])

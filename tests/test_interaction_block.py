@@ -58,7 +58,9 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
+    angle_edge_basis = model.angle_edge_rbf(graph.edge_lengths)
     edge_modulation = model.edge_modulation(edge_basis)
+    triplet_modulation = model.triplet_modulation(angle_edge_basis)
     edge_ij = model.edge_embedding(edge_basis)
 
     atom_out, edge_out = model.interactions[0](
@@ -66,6 +68,7 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
         edge_ij,
         graph,
         edge_modulation,
+        triplet_modulation,
     )
 
     assert atom_out.shape == atom_fea.shape
@@ -131,12 +134,13 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
-    edge_modulation = model.edge_modulation(edge_basis)
+    angle_edge_basis = model.angle_edge_rbf(graph.edge_lengths)
+    triplet_modulation = model.triplet_modulation(angle_edge_basis)
     edge_ij = model.edge_embedding(edge_basis)
     delta = model.interactions[0].three_body(
         edge_ij,
         graph,
-        edge_modulation.edge,
+        triplet_modulation,
     )
 
     assert delta.shape == edge_ij.shape
@@ -149,7 +153,9 @@ def test_interaction_block_residual_scale_zero_returns_identity():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
+    angle_edge_basis = model.angle_edge_rbf(graph.edge_lengths)
     edge_modulation = model.edge_modulation(edge_basis)
+    triplet_modulation = model.triplet_modulation(angle_edge_basis)
     edge_ij = model.edge_embedding(edge_basis)
 
     atom_out, edge_out = model.interactions[0](
@@ -157,6 +163,7 @@ def test_interaction_block_residual_scale_zero_returns_identity():
         edge_ij,
         graph,
         edge_modulation,
+        triplet_modulation,
     )
 
     assert torch.allclose(atom_out, atom_fea)
@@ -175,11 +182,12 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
         atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
         edge=torch.zeros_like(edge_ij),
     )
+    zero_triplet_modulation = torch.zeros_like(edge_ij)
 
     triplet_delta = block.three_body(
         block.triplet_edge_norm(edge_ij),
         graph,
-        zero_modulation.edge,
+        zero_triplet_modulation,
     )
     pair_delta = block.edge_update(
         block.pair_atom_norm(atom_fea),
