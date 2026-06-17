@@ -1,10 +1,10 @@
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
-from gptff.model import model 
 import torch
 from typing import Optional
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
+from gptff.model import GPTFFNet, tModLodaer_t
 from gptff.model.prediction import predict_energy_forces_stress
 
 
@@ -26,9 +26,9 @@ class ASECalculator(Calculator):
         cfg.device = device
         self.cfg = cfg
         if self.state['cfg']['transformer_activate']:
-            self.model = model.tModLodaer_t(cfg)
+            self.model = tModLodaer_t(cfg)
         else:
-            self.model = model.tModLodaer(cfg)
+            self.model = GPTFFNet(cfg)
         self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)

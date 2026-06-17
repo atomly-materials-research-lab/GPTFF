@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from gptff.model.model import AtomEmbedding, EdgeEmbedding, tModLodaer
+from gptff.model import GPTFFNet
+from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
 
 
 def test_atom_embedding_has_no_max_norm_constraint():
@@ -45,7 +46,7 @@ def test_non_transformer_model_uses_embedding_modules():
         device="cpu",
     )
 
-    model = tModLodaer(cfg)
+    model = GPTFFNet(cfg)
 
     assert isinstance(model.atom_embedding, AtomEmbedding)
     assert isinstance(model.edge_embedding, EdgeEmbedding)

@@ -8,7 +8,7 @@ from gptff.model.element_refs import (
     build_element_ref_tensor,
     fit_element_refs_from_samples,
 )
-from gptff.model.model import EnergyHead
+from gptff.model.readout import EnergyHead
 
 
 def test_energy_head_is_extensive_for_learned_site_energy():

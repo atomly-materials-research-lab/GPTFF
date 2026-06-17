@@ -17,8 +17,8 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from gptff.model import GPTFFNet, tModLodaer_t
 from gptff.model.element_refs import fit_element_refs_from_samples
-from gptff.model.model import tModLodaer, tModLodaer_t
 from gptff.model.prediction import predict_energy_forces_stress
 from gptff.utils_.data import (
     CosineAnnealingWarmupRestarts,
@@ -235,7 +235,7 @@ def build_loaders(
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
-    model = tModLodaer_t(config) if config.transformer_activate else tModLodaer(config)
+    model = tModLodaer_t(config) if config.transformer_activate else GPTFFNet(config)
     return model.to(config.device)
 
 

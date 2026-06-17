@@ -5,7 +5,8 @@ import torch.nn as nn
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model.model import InteractionBlock, tModLodaer
+from gptff.model import GPTFFNet
+from gptff.model.interaction import InteractionBlock
 
 
 def _cfg(n_layers=1):
@@ -33,7 +34,7 @@ def _batch(a_cut=3.0):
 
 
 def test_non_transformer_model_uses_interaction_blocks():
-    model = tModLodaer(_cfg(n_layers=2))
+    model = GPTFFNet(_cfg(n_layers=2))
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
@@ -44,7 +45,7 @@ def test_non_transformer_model_uses_interaction_blocks():
 
 def test_interaction_block_returns_finite_atom_and_edge_features():
     graph = _batch()
-    model = tModLodaer(_cfg())
+    model = GPTFFNet(_cfg())
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
@@ -70,7 +71,7 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
 
 def test_three_body_edge_delta_is_zero_without_angle_triplets():
     graph = _batch(a_cut=1.0)
-    model = tModLodaer(_cfg())
+    model = GPTFFNet(_cfg())
 
     assert graph.triplet_edge_index.numel() == 0
 

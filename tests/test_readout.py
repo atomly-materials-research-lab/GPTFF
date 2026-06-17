@@ -5,7 +5,7 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraph, CrystalGraphBatch, CrystalGraphConverter
-from gptff.model.model import tModLodaer
+from gptff.model import GPTFFNet
 
 
 def test_atomwise_readout_is_extensive_for_disconnected_copies():
@@ -23,7 +23,7 @@ def test_atomwise_readout_is_extensive_for_disconnected_copies():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
     graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
     doubled_graph = _make_disconnected_double_graph(graph)
-    model = tModLodaer(cfg)
+    model = GPTFFNet(cfg)
 
     single_energy = model(CrystalGraphBatch.from_graphs([graph]).with_geometry())
     doubled_energy = model(CrystalGraphBatch.from_graphs([doubled_graph]).with_geometry())

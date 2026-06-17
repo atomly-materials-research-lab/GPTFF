@@ -4,45 +4,9 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
-from gptff.model.element_refs import build_element_ref_tensor
-
-
-class AtomEmbedding(nn.Module):
-    def __init__(self, atom_fea_len, max_atomic_number=94, normalize=True):
-        super().__init__()
-        if max_atomic_number < 1:
-            raise ValueError("max_atomic_number must be positive.")
-
-        self.max_atomic_number = int(max_atomic_number)
-        self.embedding = nn.Embedding(self.max_atomic_number + 1, atom_fea_len)
-        self.norm = nn.LayerNorm(atom_fea_len) if normalize else nn.Identity()
-
-    def forward(self, atom_types):
-        if atom_types.numel() > 0:
-            torch._assert(
-                torch.all((atom_types >= 1) & (atom_types <= self.max_atomic_number)),
-                f"Atomic numbers must be in the range [1, {self.max_atomic_number}].",
-            )
-        return self.norm(self.embedding(atom_types))
-
-
-class EdgeEmbedding(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, normalize=True):
-        super().__init__()
-        self.bond_embedding = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.edge_embedding = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
-        self.radial_gate = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.norm = nn.LayerNorm(nbr_fea_len) if normalize else nn.Identity()
-
-    def forward(self, atom_fea, edge_index, edge_basis):
-        bond_fea = self.bond_embedding(edge_basis)
-        edge_fea = torch.cat([
-            atom_fea[edge_index[0]],
-            atom_fea[edge_index[1]],
-            bond_fea,
-        ], dim=-1)
-        edge_fea = self.edge_embedding(edge_fea) * self.radial_gate(edge_basis)
-        return self.norm(edge_fea)
+from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
+from gptff.model.interaction import EdgeUpdate, InteractionBlock
+from gptff.model.readout import EnergyHead
 
 
 class ThreeBody(nn.Module):
@@ -95,29 +59,6 @@ class ThreeBody(nn.Module):
         edge_ij = torch.index_add(edge_ij, 0, edge_ij_indices, atom_fea_ik)
         return edge_ij
 
-class EdgeUpdate(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial) :
-        super(EdgeUpdate, self).__init__()
-        self.atom_fea_len = atom_fea_len
-        self.nbr_fea_len = nbr_fea_len
-        self.swish = nn.SiLU()
-        self.sig = nn.Sigmoid()
-        self.W_1 = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
-        self.W_2 = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
-        self.W_r = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.W_3 = nn.Linear(nbr_fea_len, nbr_fea_len)
-
-    def forward(self, atom_fea, edge_ij, graph, edge_basis):
-        atom_nbr_fea = torch.cat([atom_fea[graph.edge_index[0]],
-                                  atom_fea[graph.edge_index[1]],
-                                  edge_ij], dim=-1)
-        
-        edge_ij = self.swish(self.W_1(atom_nbr_fea)) * self.sig(self.W_2(atom_nbr_fea))
-        
-        edge_ij = self.swish(self.W_3(edge_ij)) * self.W_r(edge_basis)
-
-        return edge_ij
-
 class ConvLayer(nn.Module):
     def __init__(self, atom_fea_len, nbr_fea_len, num_radial):
         super(ConvLayer, self).__init__()
@@ -144,149 +85,6 @@ class ConvLayer(nn.Module):
         atom_fea = torch.index_add(atom_fea, 0, graph.edge_index[0], nbr_all.float())
 
         return atom_fea
-
-
-class ThreeBodyEdgeDelta(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, num_angular):
-        super().__init__()
-        self.atom_fea_len = atom_fea_len
-        self.nbr_fea_len = nbr_fea_len
-        self.angle_basis = FourierAngleBasis(num_angular)
-        self.angle_embedding = nn.Linear(self.angle_basis.out_dim, nbr_fea_len, bias=False)
-        self.bond_embedding_k = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.bond_embedding_j = nn.Linear(num_radial, nbr_fea_len, bias=False)
-
-        self.sig = nn.Sigmoid()
-        self.swish = nn.SiLU()
-
-        self.W_fea = nn.Linear(3 * atom_fea_len + 2 * nbr_fea_len, nbr_fea_len)
-        self.W_1 = nn.Linear(nbr_fea_len, nbr_fea_len)
-        self.W_2 = nn.Linear(nbr_fea_len, nbr_fea_len)
-
-    def forward(self, atom_fea, edge_ij, graph, triplet_basis_ij, triplet_basis_ik):
-        if graph.triplet_edge_index.numel() == 0:
-            return edge_ij.new_zeros(edge_ij.shape)
-
-        edge_ij_indices = graph.triplet_edge_index[0]
-        edge_ik_indices = graph.triplet_edge_index[1]
-        triple_i_indices = graph.edge_index[0][edge_ij_indices]
-        triple_j_indices = graph.edge_index[1][edge_ij_indices]
-        triple_k_indices = graph.edge_index[1][edge_ik_indices]
-        atom_fea_ik = torch.cat([
-            atom_fea[triple_i_indices],
-            atom_fea[triple_j_indices],
-            atom_fea[triple_k_indices],
-            edge_ij[edge_ij_indices],
-            edge_ij[edge_ik_indices],
-        ], dim=-1)
-
-        atom_fea_ik = self.swish(self.W_fea(atom_fea_ik))
-
-        angles_mat = self.angle_embedding(self.angle_basis(graph.triplet_cosine))
-        bonds_mat_k = self.bond_embedding_k(triplet_basis_ik)
-        bonds_mat_j = self.bond_embedding_j(triplet_basis_ij)
-        atom_fea_ik = (
-            self.sig(self.W_1(atom_fea_ik))
-            * self.swish(self.W_2(atom_fea_ik))
-            * bonds_mat_j
-            * bonds_mat_k
-            * angles_mat
-        )
-
-        edge_delta = edge_ij.new_zeros(edge_ij.shape)
-        return torch.index_add(edge_delta, 0, edge_ij_indices, atom_fea_ik)
-
-
-class AtomFeatureDelta(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial):
-        super().__init__()
-        self.atom_fea_len = atom_fea_len
-        self.nbr_fea_len = nbr_fea_len
-        self.fc_full = nn.Linear(2 * atom_fea_len + nbr_fea_len, 2 * atom_fea_len)
-        self.sig = nn.Sigmoid()
-        self.swish = nn.SiLU()
-
-        self.W_r = nn.Linear(num_radial, atom_fea_len, bias=False)
-        self.W_1 = nn.Linear(2 * atom_fea_len, atom_fea_len)
-        self.W_2 = nn.Linear(2 * atom_fea_len, atom_fea_len)
-
-    def forward(self, atom_fea, edge_ij, edge_basis, graph):
-        atom_nbr_fea = torch.cat([
-            atom_fea[graph.edge_index[0]],
-            atom_fea[graph.edge_index[1]],
-            edge_ij,
-        ], dim=-1)
-        atom_gated_fea = self.swish(self.fc_full(atom_nbr_fea))
-
-        atom_msg = self.swish(self.W_1(atom_gated_fea)) * self.sig(self.W_2(atom_gated_fea))
-        atom_msg = atom_msg * self.W_r(edge_basis)
-
-        atom_delta = atom_fea.new_zeros(atom_fea.shape)
-        return torch.index_add(atom_delta, 0, graph.edge_index[0], atom_msg.to(atom_delta.dtype))
-
-
-class InteractionBlock(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, num_angular):
-        super().__init__()
-        self.three_body = ThreeBodyEdgeDelta(
-            atom_fea_len=atom_fea_len,
-            nbr_fea_len=nbr_fea_len,
-            num_radial=num_radial,
-            num_angular=num_angular,
-        )
-        self.edge_update = EdgeUpdate(atom_fea_len, nbr_fea_len, num_radial)
-        self.atom_update = AtomFeatureDelta(atom_fea_len, nbr_fea_len, num_radial)
-        self.triplet_edge_norm = nn.LayerNorm(nbr_fea_len)
-        self.pair_edge_norm = nn.LayerNorm(nbr_fea_len)
-        self.atom_norm = nn.LayerNorm(atom_fea_len)
-
-    def forward(self, atom_fea, edge_ij, graph, edge_basis, triplet_basis_ij, triplet_basis_ik):
-        triplet_delta = self.three_body(
-            atom_fea,
-            edge_ij,
-            graph,
-            triplet_basis_ij,
-            triplet_basis_ik,
-        )
-        edge_ij = self.triplet_edge_norm(edge_ij + triplet_delta)
-
-        pair_delta = self.edge_update(atom_fea, edge_ij, graph, edge_basis)
-        edge_ij = self.pair_edge_norm(edge_ij + pair_delta)
-
-        atom_delta = self.atom_update(atom_fea, edge_ij, edge_basis, graph)
-        atom_fea = self.atom_norm(atom_fea + atom_delta)
-        return atom_fea, edge_ij
-
-
-class EnergyHead(nn.Module):
-    def __init__(self, atom_fea_len, max_atomic_number=94, element_refs=None):
-        super().__init__()
-        self.max_atomic_number = int(max_atomic_number)
-        self.swish = nn.SiLU()
-        self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
-        self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
-        self.fc_out = nn.Linear(atom_fea_len, 1)
-        self.register_buffer(
-            "element_refs",
-            build_element_ref_tensor(
-                element_refs,
-                max_atomic_number=self.max_atomic_number,
-            ),
-        )
-
-    def forward(self, atom_fea, atom_types, atom_batch, num_graphs):
-        site_energy = self.swish(self.fc1(atom_fea))
-        site_energy = self.swish(self.fc2(site_energy))
-        site_energy = self.fc_out(site_energy)
-        if self.element_refs is not None:
-            site_energy = site_energy + self.element_refs[atom_types].unsqueeze(-1)
-
-        energy = torch.zeros(
-            (num_graphs, 1),
-            dtype=site_energy.dtype,
-            device=site_energy.device,
-        )
-        return torch.index_add(energy, 0, atom_batch, site_energy)
 
 
 class Attention(nn.Module):
@@ -455,11 +253,11 @@ class tModLodaer_t(nn.Module):
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
 
 
-class tModLodaer(nn.Module):
+class GPTFFNet(nn.Module):
     def __init__(self, CFG
                         ):
         
-        super(tModLodaer, self).__init__()
+        super().__init__()
         
         atom_fea_len = CFG.node_feature_len
         nbr_fea_len = CFG.edge_feature_len

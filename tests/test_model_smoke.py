@@ -4,7 +4,7 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model.model import tModLodaer
+from gptff.model import GPTFFNet
 from gptff.model.prediction import predict_energy_forces_stress
 
 
@@ -29,7 +29,7 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
     batch = CrystalGraphBatch.from_graphs([graph])
 
     energy, forces, stress = predict_energy_forces_stress(
-        tModLodaer(cfg),
+        GPTFFNet(cfg),
         batch,
         create_graph=True,
     )
