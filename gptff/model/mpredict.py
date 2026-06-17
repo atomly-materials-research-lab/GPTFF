@@ -1,17 +1,14 @@
+from types import SimpleNamespace
+from typing import Optional
+
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 import torch
-from typing import Optional
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet, tModLodaer_t
+from gptff.model import GPTFFNet, GPTFFNetConfig, tModLodaer_t
 from gptff.model.prediction import predict_energy_forces_stress
 
-
-class CFG:
-    def __init__(self, d):
-        for k, v in d.items():
-            setattr(self, k, v)
 
 class ASECalculator(Calculator):
 
@@ -22,26 +19,29 @@ class ASECalculator(Calculator):
 
         self.state = torch.load(model_path, map_location=torch.device(device))
 
-        cfg = CFG(self.state['cfg'])
-        cfg.device = device
-        self.cfg = cfg
-        if self.state['cfg']['transformer_activate']:
+        training_config = dict(self.state["cfg"])
+        self.unit_trans = float(training_config.get("unit_trans", 160.21766208))
+        if training_config["transformer_activate"]:
+            cfg = SimpleNamespace(**training_config)
+            cfg.device = device
+            self.model_config = GPTFFNetConfig.from_dict(training_config)
             self.model = tModLodaer_t(cfg)
         else:
-            self.model = GPTFFNet(cfg)
+            self.model_config = GPTFFNetConfig.from_dict(self.state["model_config"])
+            self.model = GPTFFNet(self.model_config)
         self.device = device
         self.model.load_state_dict(self.state['state_dict'])
         self.model = self.model.to(device)
         self.graph_converter = CrystalGraphConverter(
-            r_cut=getattr(cfg, "radial_cutoff", 5.0),
-            a_cut=getattr(cfg, "angle_cutoff", 3.5),
+            r_cut=self.model_config.radial_cutoff,
+            a_cut=self.model_config.angle_cutoff,
         )
 
     def get_efs(self, batch):
         return predict_energy_forces_stress(
             self.model,
             batch,
-            unit_trans=160.21766208,
+            unit_trans=self.unit_trans,
             create_graph=False,
         )
 

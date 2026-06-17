@@ -1,9 +1,7 @@
-from types import SimpleNamespace
-
 import pytest
 import torch
 
-from gptff.model import GPTFFNet
+from gptff.model import GPTFFNet, GPTFFNetConfig
 from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
 
 
@@ -33,7 +31,7 @@ def test_edge_embedding_returns_normalized_edge_features():
 
 
 def test_non_transformer_model_uses_embedding_modules():
-    cfg = SimpleNamespace(
+    cfg = GPTFFNetConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -43,7 +41,6 @@ def test_non_transformer_model_uses_embedding_modules():
         angle_cutoff=3.0,
         cutoff_coeff=5,
         max_atomic_number=94,
-        device="cpu",
     )
 
     model = GPTFFNet(cfg)

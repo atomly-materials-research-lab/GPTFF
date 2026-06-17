@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
-from gptff.trainer.trainer import TrainingConfig, apply_fitted_element_refs
+from gptff.model import GPTFFNetConfig
+from gptff.trainer.trainer import TrainingConfig, apply_fitted_element_refs, save_checkpoint
 
 
 def test_trainer_config_parses_legacy_json_keys_without_side_effects():
@@ -13,7 +15,20 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.num_workers == 0
     assert config.num_train_steps == config.epochs
     assert config.element_refs == "atomly"
+    assert config.n_readout_layers == 4
     assert config.checkpoint_dict()["data_file"] == "data.csv"
+
+
+def test_training_config_builds_model_config_only_from_model_fields():
+    config = TrainingConfig.from_dict(_raw_config())
+
+    model_config = config.to_model_config()
+
+    assert isinstance(model_config, GPTFFNetConfig)
+    assert model_config.n_readout_layers == 4
+    assert model_config.element_refs == "atomly"
+    assert "batch_size" not in model_config.to_dict()
+    assert "device" not in model_config.to_dict()
 
 
 def test_apply_fitted_element_refs_updates_checkpoint_config():
@@ -42,6 +57,30 @@ def test_apply_fitted_element_refs_rejects_manual_refs_conflict():
         apply_fitted_element_refs(config, [_sample([1], -1.0)])
 
 
+def test_save_checkpoint_writes_separate_model_config(tmp_path):
+    config = TrainingConfig.from_dict(_raw_config())
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+    save_checkpoint(
+        tmp_path,
+        model,
+        optimizer,
+        config,
+        epoch=1,
+        best_mae_error=0.1,
+        is_best=True,
+    )
+
+    state = torch.load(tmp_path / "curr_checkpoint.pth", map_location="cpu")
+
+    assert state["model_name"] == "GPTFFNet"
+    assert state["model_config"]["n_readout_layers"] == 4
+    assert "device" not in state["model_config"]
+    assert state["cfg"]["batch_size"] == 4
+    assert (tmp_path / "best_checkpoint.pth").exists()
+
+
 def _sample(atom_types, energy):
     return SimpleNamespace(
         graph=SimpleNamespace(atom_types=np.asarray(atom_types, dtype=np.int64)),
@@ -67,6 +106,7 @@ def _raw_config():
             "element_refs": "atomly",
             "fit_element_refs": False,
             "element_ref_ridge": 0.0,
+            "n_readout_layers": 4,
             "n_layers": 1,
             "warmup_steps": 0,
             "device": "cpu",

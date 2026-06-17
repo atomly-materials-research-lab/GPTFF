@@ -17,7 +17,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from gptff.model import GPTFFNet, tModLodaer_t
+from gptff.model import GPTFFNet, GPTFFNetConfig, tModLodaer_t
 from gptff.model.element_refs import fit_element_refs_from_samples
 from gptff.model.prediction import predict_energy_forces_stress
 from gptff.utils_.data import (
@@ -57,6 +57,7 @@ class TrainingConfig:
     element_refs: Any = None
     fit_element_refs: bool = False
     element_ref_ridge: float = 0.0
+    n_readout_layers: int = 3
     unit_trans: float = 160.21766208
     output_dir: str = "."
     min_lr: float = 5e-6
@@ -98,6 +99,7 @@ class TrainingConfig:
             element_refs=training.get("element_refs", None),
             fit_element_refs=bool(training.get("fit_element_refs", False)),
             element_ref_ridge=float(training.get("element_ref_ridge", 0.0)),
+            n_readout_layers=int(training.get("n_readout_layers", 3)),
             unit_trans=float(training.get("unit_trans", 160.21766208)),
             output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
             min_lr=float(training.get("min_lr", 5e-6)),
@@ -108,6 +110,21 @@ class TrainingConfig:
 
     def checkpoint_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def to_model_config(self) -> GPTFFNetConfig:
+        return GPTFFNetConfig(
+            node_feature_len=self.node_feature_len,
+            edge_feature_len=self.edge_feature_len,
+            n_layers=self.n_layers,
+            num_radial=self.num_radial,
+            num_angular=self.num_angular,
+            radial_cutoff=self.radial_cutoff,
+            angle_cutoff=self.angle_cutoff,
+            cutoff_coeff=self.cutoff_coeff,
+            max_atomic_number=self.max_atomic_number,
+            element_refs=self.element_refs,
+            n_readout_layers=self.n_readout_layers,
+        )
 
 
 @dataclass
@@ -235,7 +252,7 @@ def build_loaders(
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
-    model = tModLodaer_t(config) if config.transformer_activate else GPTFFNet(config)
+    model = tModLodaer_t(config) if config.transformer_activate else GPTFFNet(config.to_model_config())
     return model.to(config.device)
 
 
@@ -431,6 +448,8 @@ def save_checkpoint(
         "best_mae_error": best_mae_error,
         "optimizer": optimizer.state_dict(),
         "cfg": config.checkpoint_dict(),
+        "model_name": "tModLodaer_t" if config.transformer_activate else "GPTFFNet",
+        "model_config": config.to_model_config().to_dict(),
     }
     current_path = output_dir / "curr_checkpoint.pth"
     torch.save(model_state, current_path)

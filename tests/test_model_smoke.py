@@ -1,15 +1,13 @@
-from types import SimpleNamespace
-
 import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet
+from gptff.model import GPTFFNet, GPTFFNetConfig
 from gptff.model.prediction import predict_energy_forces_stress
 
 
 def test_model_forward_and_efs_with_smooth_radial_basis():
-    cfg = SimpleNamespace(
+    cfg = GPTFFNetConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -18,7 +16,6 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
         radial_cutoff=3.0,
         angle_cutoff=3.0,
         cutoff_coeff=5,
-        device="cpu",
     )
     structure = Structure(
         Lattice.cubic(3.0),

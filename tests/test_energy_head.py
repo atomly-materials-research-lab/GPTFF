@@ -23,6 +23,15 @@ def test_energy_head_is_extensive_for_learned_site_energy():
     assert torch.allclose(tripled_energy, 3 * single_energy, atol=1e-6, rtol=1e-6)
 
 
+def test_energy_head_respects_readout_depth():
+    head = EnergyHead(atom_fea_len=4, n_readout_layers=4)
+
+    linear_layers = [module for module in head.mlp if isinstance(module, torch.nn.Linear)]
+
+    assert len(linear_layers) == 4
+    assert linear_layers[-1].out_features == 1
+
+
 def test_energy_head_adds_element_reference_energies():
     head = EnergyHead(
         atom_fea_len=4,

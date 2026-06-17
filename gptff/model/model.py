@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
+from gptff.model.config import GPTFFNetConfig
 from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
 from gptff.model.interaction import EdgeUpdate, InteractionBlock
 from gptff.model.readout import EnergyHead
@@ -163,6 +164,7 @@ class tModLodaer_t(nn.Module):
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
         max_atomic_number = getattr(CFG, "max_atomic_number", 94)
         element_refs = getattr(CFG, "element_refs", None)
+        n_readout_layers = getattr(CFG, "n_readout_layers", 3)
 
         self.device = CFG.device
 
@@ -203,6 +205,7 @@ class tModLodaer_t(nn.Module):
             atom_fea_len,
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
+            n_readout_layers=n_readout_layers,
         )
 
     def forward(self, graph):
@@ -254,23 +257,19 @@ class tModLodaer_t(nn.Module):
 
 
 class GPTFFNet(nn.Module):
-    def __init__(self, CFG
-                        ):
-        
+    def __init__(self, config: GPTFFNetConfig):
         super().__init__()
-        
-        atom_fea_len = CFG.node_feature_len
-        nbr_fea_len = CFG.edge_feature_len
-        n_layers = CFG.n_layers
-        num_radial = getattr(CFG, "num_radial", 16)
-        num_angular = getattr(CFG, "num_angular", 4)
-        radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
-        angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
-        cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
-        max_atomic_number = getattr(CFG, "max_atomic_number", 94)
-        element_refs = getattr(CFG, "element_refs", None)
 
-        self.device = CFG.device
+        atom_fea_len = config.node_feature_len
+        nbr_fea_len = config.edge_feature_len
+        n_layers = config.n_layers
+        num_radial = config.num_radial
+        num_angular = config.num_angular
+        radial_cutoff = config.radial_cutoff
+        angle_cutoff = config.angle_cutoff
+        cutoff_coeff = config.cutoff_coeff
+        max_atomic_number = config.max_atomic_number
+        element_refs = config.element_refs
 
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -298,6 +297,7 @@ class GPTFFNet(nn.Module):
             atom_fea_len,
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
+            n_readout_layers=config.n_readout_layers,
         )
 
     def forward(self, graph):

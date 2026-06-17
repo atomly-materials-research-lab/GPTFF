@@ -1,15 +1,13 @@
-from types import SimpleNamespace
-
 import numpy as np
 import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraph, CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet
+from gptff.model import GPTFFNet, GPTFFNetConfig
 
 
 def test_atomwise_readout_is_extensive_for_disconnected_copies():
-    cfg = SimpleNamespace(
+    cfg = GPTFFNetConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -18,7 +16,6 @@ def test_atomwise_readout_is_extensive_for_disconnected_copies():
         radial_cutoff=2.1,
         angle_cutoff=2.1,
         cutoff_coeff=5,
-        device="cpu",
     )
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
     graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)

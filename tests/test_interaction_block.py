@@ -1,16 +1,14 @@
-from types import SimpleNamespace
-
 import torch
 import torch.nn as nn
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet
+from gptff.model import GPTFFNet, GPTFFNetConfig
 from gptff.model.interaction import InteractionBlock
 
 
 def _cfg(n_layers=1):
-    return SimpleNamespace(
+    return GPTFFNetConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=n_layers,
@@ -19,7 +17,6 @@ def _cfg(n_layers=1):
         radial_cutoff=3.0,
         angle_cutoff=3.0,
         cutoff_coeff=5,
-        device="cpu",
     )
 
 
