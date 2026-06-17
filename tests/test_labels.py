@@ -7,6 +7,7 @@ from gptff.utils_.labels import (
     convert_forces_to_ev_per_ang,
     convert_stress_to_gpa,
     normalize_stress_unit,
+    stress_gpa_to_ase_voigt,
 )
 
 
@@ -33,3 +34,26 @@ def test_label_config_validates_units():
 
     with pytest.raises(ValueError, match="stress_unit"):
         LabelConfig(stress_unit="bar")
+
+
+def test_stress_gpa_to_ase_voigt_uses_ase_order_and_units():
+    stress_gpa = np.array(
+        [
+            [1.0, 6.0, 5.0],
+            [6.0, 2.0, 4.0],
+            [5.0, 4.0, 3.0],
+        ],
+        dtype=np.float64,
+    )
+
+    stress_voigt = stress_gpa_to_ase_voigt(stress_gpa)
+
+    assert np.allclose(
+        stress_voigt,
+        np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) / EV_PER_ANG3_TO_GPA,
+    )
+
+
+def test_stress_gpa_to_ase_voigt_rejects_non_matrix_input():
+    with pytest.raises(ValueError, match="shape"):
+        stress_gpa_to_ase_voigt(np.ones((6,)))
