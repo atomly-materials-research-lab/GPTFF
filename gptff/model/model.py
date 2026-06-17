@@ -105,6 +105,27 @@ class ConvLayer(nn.Module):
 
         return atom_fea
 
+
+class AtomWiseReadout(nn.Module):
+    def __init__(self, atom_fea_len):
+        super().__init__()
+        self.swish = nn.SiLU()
+        self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
+        self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
+        self.fc_out = nn.Linear(atom_fea_len, 1)
+
+    def forward(self, atom_fea, atom_batch, num_graphs):
+        site_energy = self.swish(self.fc1(atom_fea))
+        site_energy = self.swish(self.fc2(site_energy))
+        site_energy = self.fc_out(site_energy)
+        energy = torch.zeros(
+            (num_graphs, 1),
+            dtype=site_energy.dtype,
+            device=site_energy.device,
+        )
+        return torch.index_add(energy, 0, atom_batch, site_energy)
+
+
 class Attention(nn.Module):
     def __init__(self, d_model, heads=8, dim_head=64):
         super().__init__()
@@ -211,11 +232,7 @@ class tModLodaer_t(nn.Module):
         self.norms1 = nn.ModuleList([nn.LayerNorm(atom_fea_len) for _ in range(n_layers)])
         self.norms2 = nn.ModuleList([nn.LayerNorm(atom_fea_len) for _ in range(n_layers)])
 
-        self.swish = nn.SiLU()
-        self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
-        self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
-        
-        self.fc_out = nn.Linear(atom_fea_len, 1)
+        self.readout = AtomWiseReadout(atom_fea_len)
 
     def forward(self, graph):
         """
@@ -262,19 +279,7 @@ class tModLodaer_t(nn.Module):
 
             atom_fea = norm2(transformer(atom_fea_list, masks))[masks == False, :] + atom_fea # [masks == False, :]
 
-        cry_fea = torch.zeros(
-            (graph.num_atoms.shape[0], self.atom_fea_len),
-            dtype=atom_fea.dtype,
-            device=atom_fea.device,
-        )
-        cry_fea = torch.index_add(cry_fea, 0, graph.atom_batch, atom_fea)
-        
-        cry_fea = self.swish(self.fc1(cry_fea))
-        cry_fea = self.swish(self.fc2(cry_fea))
-        
-        out = self.fc_out(cry_fea)
-
-        return out
+        return self.readout(atom_fea, graph.atom_batch, graph.num_atoms.shape[0])
 
 
 class tModLodaer(nn.Module):
@@ -318,11 +323,7 @@ class tModLodaer(nn.Module):
         self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len, num_radial)
                                           for _ in range(n_layers))
 
-        self.swish = nn.SiLU()
-        self.fc1 = nn.Linear(atom_fea_len, atom_fea_len)
-        self.fc2 = nn.Linear(atom_fea_len, atom_fea_len)
-        
-        self.fc_out = nn.Linear(atom_fea_len, 1)
+        self.readout = AtomWiseReadout(atom_fea_len)
 
     def forward(self, graph):
         """
@@ -350,16 +351,4 @@ class tModLodaer(nn.Module):
             edge_ij = edge_ij + edge_func(atom_fea, edge_ij, graph, edge_basis)
             atom_fea = conv(atom_fea, edge_ij, edge_basis, graph)
 
-        cry_fea = torch.zeros(
-            (graph.num_atoms.shape[0], self.atom_fea_len),
-            dtype=atom_fea.dtype,
-            device=atom_fea.device,
-        )
-        cry_fea = torch.index_add(cry_fea, 0, graph.atom_batch, atom_fea)
-        
-        cry_fea = self.swish(self.fc1(cry_fea))
-        cry_fea = self.swish(self.fc2(cry_fea))
-        
-        out = self.fc_out(cry_fea)
-
-        return out
+        return self.readout(atom_fea, graph.atom_batch, graph.num_atoms.shape[0])
