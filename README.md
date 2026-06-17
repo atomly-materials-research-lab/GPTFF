@@ -205,6 +205,7 @@ The file `config.json` includes training settings,
 - edge_feature_len: The size of the edge(bond) feature length
 - n_layers: THe number of layers of GPTFF model
 - device: `cpu` or `cuda`
+- output_dir: Directory for checkpoints and validation history
 - val_fold: Label validation data during training
 - transformer_activate: If activate `transformer` block or not
 - element_refs: Elemental reference energies. Use `"atomly"`, `null`, a mapping, or a list.

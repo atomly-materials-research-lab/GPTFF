@@ -20,6 +20,7 @@
         "n_readout_layers": 3,
         "warmup_steps": 0,
         "device": "cuda",
+        "output_dir": ".",
         "val_fold": 0,
         "resume": false,
         "transformer_activate": false,
