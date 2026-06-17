@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
+from gptff.model.embedding import AtomEmbedding, EdgeEmbedding, EdgeModulationProjection
 
 
 def test_atom_embedding_has_no_max_norm_constraint():
@@ -19,15 +19,32 @@ def test_atom_embedding_rejects_invalid_atomic_numbers():
 
 
 def test_edge_embedding_returns_normalized_edge_features():
-    edge_embedding = EdgeEmbedding(atom_fea_len=8, nbr_fea_len=6, num_radial=4)
-    atom_fea = torch.randn(3, 8)
-    edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long)
+    edge_embedding = EdgeEmbedding(nbr_fea_len=6, num_radial=4)
     edge_basis = torch.randn(3, 4)
 
-    edge_fea = edge_embedding(atom_fea, edge_index, edge_basis)
+    edge_fea = edge_embedding(edge_basis)
 
     assert edge_fea.shape == (3, 6)
     assert torch.isfinite(edge_fea).all()
+
+
+def test_edge_embedding_preserves_zero_basis():
+    edge_embedding = EdgeEmbedding(nbr_fea_len=6, num_radial=4)
+    edge_basis = torch.zeros(3, 4)
+
+    edge_fea = edge_embedding(edge_basis)
+
+    assert torch.equal(edge_fea, torch.zeros_like(edge_fea))
+
+
+def test_edge_modulation_projection_preserves_zero_basis():
+    projection = EdgeModulationProjection(atom_fea_len=8, nbr_fea_len=6, num_radial=4)
+    edge_basis = torch.zeros(3, 4)
+
+    modulation = projection(edge_basis)
+
+    assert torch.equal(modulation.atom, torch.zeros_like(modulation.atom))
+    assert torch.equal(modulation.edge, torch.zeros_like(modulation.edge))
 
 
 def test_non_transformer_model_uses_embedding_modules():
@@ -47,6 +64,7 @@ def test_non_transformer_model_uses_embedding_modules():
 
     assert isinstance(model.atom_embedding, AtomEmbedding)
     assert isinstance(model.edge_embedding, EdgeEmbedding)
+    assert isinstance(model.edge_modulation, EdgeModulationProjection)
     assert not hasattr(model, "w_b")
     assert not hasattr(model, "w_eij")
     assert not hasattr(model, "w_r")

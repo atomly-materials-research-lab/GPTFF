@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
@@ -21,20 +25,38 @@ class AtomEmbedding(nn.Module):
         return self.norm(self.embedding(atom_types))
 
 
-class EdgeEmbedding(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, normalize=True):
-        super().__init__()
-        self.bond_embedding = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.edge_embedding = nn.Linear(2 * atom_fea_len + nbr_fea_len, nbr_fea_len)
-        self.radial_gate = nn.Linear(num_radial, nbr_fea_len, bias=False)
-        self.norm = nn.LayerNorm(nbr_fea_len) if normalize else nn.Identity()
+@dataclass(frozen=True)
+class EdgeModulation:
+    atom: torch.Tensor
+    edge: torch.Tensor
 
-    def forward(self, atom_fea, edge_index, edge_basis):
-        bond_fea = self.bond_embedding(edge_basis)
-        edge_fea = torch.cat([
-            atom_fea[edge_index[0]],
-            atom_fea[edge_index[1]],
-            bond_fea,
-        ], dim=-1)
-        edge_fea = self.edge_embedding(edge_fea) * self.radial_gate(edge_basis)
-        return self.norm(edge_fea)
+
+class EdgeModulationProjection(nn.Module):
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial):
+        super().__init__()
+        self.atom_weight = nn.Linear(num_radial, atom_fea_len, bias=False)
+        self.edge_weight = nn.Linear(num_radial, nbr_fea_len, bias=False)
+
+    def forward(self, edge_basis):
+        return EdgeModulation(
+            atom=self.atom_weight(edge_basis),
+            edge=self.edge_weight(edge_basis),
+        )
+
+
+class EdgeEmbedding(nn.Module):
+    def __init__(self, nbr_fea_len, num_radial, normalize=True):
+        super().__init__()
+        self.edge_embedding = nn.Sequential(
+            nn.Linear(num_radial, nbr_fea_len, bias=False),
+            nn.SiLU(),
+            nn.Linear(nbr_fea_len, nbr_fea_len, bias=False),
+        )
+        self.norm = (
+            nn.LayerNorm(nbr_fea_len, elementwise_affine=False)
+            if normalize
+            else nn.Identity()
+        )
+
+    def forward(self, edge_basis):
+        return self.norm(self.edge_embedding(edge_basis))

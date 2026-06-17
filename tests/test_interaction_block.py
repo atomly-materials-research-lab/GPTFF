@@ -9,6 +9,7 @@ from gptff.model.aggregation import (
     edge_counts_per_center,
     normalize_aggregation,
 )
+from gptff.model.embedding import EdgeModulation
 from gptff.model.interaction import InteractionBlock
 
 
@@ -42,7 +43,6 @@ def test_non_transformer_model_uses_interaction_blocks():
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
-    assert isinstance(model.interactions[0].triplet_atom_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].triplet_edge_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].pair_atom_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].pair_edge_norm, nn.LayerNorm)
@@ -58,18 +58,14 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
-    triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
-    triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
-
-    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
+    edge_modulation = model.edge_modulation(edge_basis)
+    edge_ij = model.edge_embedding(edge_basis)
 
     atom_out, edge_out = model.interactions[0](
         atom_fea,
         edge_ij,
         graph,
-        edge_basis,
-        triplet_basis_ij,
-        triplet_basis_ik,
+        edge_modulation,
     )
 
     assert atom_out.shape == atom_fea.shape
@@ -135,16 +131,12 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
-    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
-
-    triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
-    triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
+    edge_modulation = model.edge_modulation(edge_basis)
+    edge_ij = model.edge_embedding(edge_basis)
     delta = model.interactions[0].three_body(
-        atom_fea,
         edge_ij,
         graph,
-        triplet_basis_ij,
-        triplet_basis_ik,
+        edge_modulation.edge,
     )
 
     assert delta.shape == edge_ij.shape
@@ -157,18 +149,51 @@ def test_interaction_block_residual_scale_zero_returns_identity():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = model.edge_rbf(graph.edge_lengths)
-    triplet_basis_ij = model.triplet_rbf(graph.triplet_lengths_ij)
-    triplet_basis_ik = model.triplet_rbf(graph.triplet_lengths_ik)
-    edge_ij = model.edge_embedding(atom_fea, graph.edge_index, edge_basis)
+    edge_modulation = model.edge_modulation(edge_basis)
+    edge_ij = model.edge_embedding(edge_basis)
 
     atom_out, edge_out = model.interactions[0](
         atom_fea,
         edge_ij,
         graph,
-        edge_basis,
-        triplet_basis_ij,
-        triplet_basis_ik,
+        edge_modulation,
     )
 
     assert torch.allclose(atom_out, atom_fea)
     assert torch.allclose(edge_out, edge_ij)
+
+
+def test_zero_geometry_modulation_zeroes_interaction_deltas():
+    graph = _batch()
+    model = GPTFFNet(_cfg())
+    block = model.interactions[0]
+
+    atom_fea = model.atom_embedding(graph.atom_types)
+    edge_basis = model.edge_rbf(graph.edge_lengths)
+    edge_ij = model.edge_embedding(edge_basis)
+    zero_modulation = EdgeModulation(
+        atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+        edge=torch.zeros_like(edge_ij),
+    )
+
+    triplet_delta = block.three_body(
+        block.triplet_edge_norm(edge_ij),
+        graph,
+        zero_modulation.edge,
+    )
+    pair_delta = block.edge_update(
+        block.pair_atom_norm(atom_fea),
+        block.pair_edge_norm(edge_ij),
+        graph,
+        zero_modulation.edge,
+    )
+    atom_delta = block.atom_update(
+        block.atom_norm(atom_fea),
+        block.atom_edge_norm(edge_ij),
+        zero_modulation.atom,
+        graph,
+    )
+
+    assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
+    assert torch.equal(pair_delta, torch.zeros_like(pair_delta))
+    assert torch.equal(atom_delta, torch.zeros_like(atom_delta))

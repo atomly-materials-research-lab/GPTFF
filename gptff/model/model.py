@@ -5,7 +5,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 from gptff.model.config import GPTFFNetConfig
-from gptff.model.embedding import AtomEmbedding, EdgeEmbedding
+from gptff.model.embedding import AtomEmbedding, EdgeEmbedding, EdgeModulationProjection
 from gptff.model.interaction import EdgeUpdate, InteractionBlock
 from gptff.model.readout import EnergyHead
 
@@ -281,15 +281,14 @@ class GPTFFNet(nn.Module):
         self.angle_cutoff = angle_cutoff
         self.max_atomic_number = max_atomic_number
         self.atom_embedding = AtomEmbedding(atom_fea_len, max_atomic_number=max_atomic_number)
-        self.edge_embedding = EdgeEmbedding(atom_fea_len, nbr_fea_len, num_radial)
+        self.edge_embedding = EdgeEmbedding(nbr_fea_len, num_radial)
+        self.edge_modulation = EdgeModulationProjection(atom_fea_len, nbr_fea_len, num_radial)
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
-        self.triplet_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
 
         self.interactions = nn.ModuleList([
             InteractionBlock(
                 atom_fea_len=atom_fea_len,
                 nbr_fea_len=nbr_fea_len,
-                num_radial=num_radial,
                 num_angular=num_angular,
                 dropout=config.interaction_dropout,
                 residual_scale=config.residual_scale,
@@ -313,19 +312,15 @@ class GPTFFNet(nn.Module):
 
         atom_fea = self.atom_embedding(graph.atom_types)
         edge_basis = self.edge_rbf(graph.edge_lengths)
-        
-        triplet_basis_ij = self.triplet_rbf(graph.triplet_lengths_ij)
-        triplet_basis_ik = self.triplet_rbf(graph.triplet_lengths_ik)
-        edge_ij = self.edge_embedding(atom_fea, graph.edge_index, edge_basis)
+        edge_modulation = self.edge_modulation(edge_basis)
+        edge_ij = self.edge_embedding(edge_basis)
         
         for interaction in self.interactions:
             atom_fea, edge_ij = interaction(
                 atom_fea,
                 edge_ij,
                 graph,
-                edge_basis,
-                triplet_basis_ij,
-                triplet_basis_ik,
+                edge_modulation,
             )
 
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
