@@ -9,6 +9,7 @@
         "node_feature_len": 64,
         "edge_feature_len": 64,
         "num_radial": 16,
+        "num_angular": 4,
         "radial_cutoff": 5.0,
         "angle_cutoff": 3.5,
         "cutoff_coeff": 5,

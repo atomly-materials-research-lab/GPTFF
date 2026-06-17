@@ -14,6 +14,7 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
         edge_feature_len=8,
         n_layers=1,
         num_radial=8,
+        num_angular=4,
         radial_cutoff=3.0,
         angle_cutoff=3.0,
         cutoff_coeff=5,

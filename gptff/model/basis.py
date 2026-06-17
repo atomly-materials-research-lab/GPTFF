@@ -70,3 +70,41 @@ class RadialBesselBasis(nn.Module):
             frequencies / self.cutoff,
         )
         return self.cutoff_fn(distances) * self.norm_const * radial
+
+
+class FourierAngleBasis(nn.Module):
+    def __init__(self, num_angular: int = 4, clamp_margin: float = 1e-7):
+        super().__init__()
+        if num_angular < 0:
+            raise ValueError("num_angular must be non-negative.")
+        if not 0 < clamp_margin < 1:
+            raise ValueError("clamp_margin must be between 0 and 1.")
+
+        self.num_angular = int(num_angular)
+        self.out_dim = 2 * self.num_angular + 1
+        self.clamp_margin = float(clamp_margin)
+        self.register_buffer(
+            "orders",
+            torch.arange(1, self.num_angular + 1, dtype=torch.float32),
+        )
+
+    def forward(self, cosines: torch.Tensor) -> torch.Tensor:
+        cosines = cosines.reshape(-1, 1)
+        margin = max(self.clamp_margin, torch.finfo(cosines.dtype).eps)
+        angles = torch.acos(torch.clamp(cosines, -1 + margin, 1 - margin))
+
+        constant = torch.full_like(cosines, 1.0 / math.sqrt(2.0))
+        if self.num_angular == 0:
+            return constant / math.sqrt(math.pi)
+
+        orders = self.orders.to(dtype=cosines.dtype, device=cosines.device)
+        harmonics = angles * orders
+        basis = torch.cat(
+            [
+                constant,
+                torch.cos(harmonics),
+                torch.sin(harmonics),
+            ],
+            dim=1,
+        )
+        return basis / math.sqrt(math.pi)

@@ -61,6 +61,7 @@ class CFG:
     edge_feature_len = js['training']['edge_feature_len']
     n_layers = js['training']['n_layers']
     num_radial = js['training'].get('num_radial', 16)
+    num_angular = js['training'].get('num_angular', 4)
     radial_cutoff = js['training'].get('radial_cutoff', 5.0)
     angle_cutoff = js['training'].get('angle_cutoff', 3.5)
     cutoff_coeff = js['training'].get('cutoff_coeff', 5)

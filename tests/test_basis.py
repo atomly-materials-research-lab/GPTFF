@@ -1,6 +1,6 @@
 import torch
 
-from gptff.model.basis import PolynomialCutoff, RadialBesselBasis
+from gptff.model.basis import FourierAngleBasis, PolynomialCutoff, RadialBesselBasis
 
 
 def test_radial_bessel_basis_shape():
@@ -49,3 +49,31 @@ def test_radial_bessel_basis_has_finite_distance_gradients():
     loss.backward()
 
     assert torch.isfinite(distances.grad).all()
+
+
+def test_fourier_angle_basis_shape():
+    basis = FourierAngleBasis(num_angular=4)
+    cosines = torch.tensor([-0.5, 0.0, 0.5])
+
+    out = basis(cosines)
+
+    assert out.shape == (3, 9)
+
+
+def test_fourier_angle_basis_is_finite_at_angle_boundaries():
+    basis = FourierAngleBasis(num_angular=4)
+    cosines = torch.tensor([-1.0, -0.999999, 0.0, 0.999999, 1.0])
+
+    out = basis(cosines)
+
+    assert torch.isfinite(out).all()
+
+
+def test_fourier_angle_basis_has_finite_cosine_gradients():
+    basis = FourierAngleBasis(num_angular=4)
+    cosines = torch.tensor([-0.9, -0.1, 0.1, 0.9], requires_grad=True)
+
+    loss = basis(cosines).sum()
+    loss.backward()
+
+    assert torch.isfinite(cosines.grad).all()

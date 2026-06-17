@@ -14,6 +14,7 @@ def test_atomwise_readout_is_extensive_for_disconnected_copies():
         edge_feature_len=8,
         n_layers=1,
         num_radial=8,
+        num_angular=4,
         radial_cutoff=2.1,
         angle_cutoff=2.1,
         cutoff_coeff=5,

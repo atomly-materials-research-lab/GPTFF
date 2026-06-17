@@ -3,17 +3,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
-from gptff.model.basis import RadialBesselBasis
+from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
 
 
 class ThreeBody(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, device):
+    def __init__(self, atom_fea_len, nbr_fea_len, num_radial, num_angular, device):
         super(ThreeBody, self).__init__()
 
         self.device = device
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
-        self.angle_embedding = nn.Linear(1, nbr_fea_len)
+        self.angle_basis = FourierAngleBasis(num_angular)
+        self.angle_embedding = nn.Linear(self.angle_basis.out_dim, nbr_fea_len, bias=False)
         self.bond_embedding_k = nn.Linear(num_radial, nbr_fea_len, bias=False)
         self.bond_embedding_j = nn.Linear(num_radial, nbr_fea_len, bias=False)
 
@@ -47,7 +48,7 @@ class ThreeBody(nn.Module):
         
         atom_fea_ik = self.swish(self.W_fea(atom_fea_ik))
 
-        angles_mat = self.angle_embedding(graph.triplet_cosine.unsqueeze(-1)) # L, nbr_fea_len
+        angles_mat = self.angle_embedding(self.angle_basis(graph.triplet_cosine)) # L, nbr_fea_len
         bonds_mat_k = self.bond_embedding_k(triplet_basis_ik) # L, nbr_fea_len
         bonds_mat_j = self.bond_embedding_j(triplet_basis_ij)
         atom_fea_ik = self.sig(self.W_1(atom_fea_ik)) * self.swish(self.W_2(atom_fea_ik)) * bonds_mat_j * bonds_mat_k * angles_mat
@@ -196,6 +197,7 @@ class tModLodaer_t(nn.Module):
         nbr_fea_len = CFG.edge_feature_len
         n_layers = CFG.n_layers
         num_radial = getattr(CFG, "num_radial", 16)
+        num_angular = getattr(CFG, "num_angular", 4)
         radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
         angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
@@ -205,6 +207,7 @@ class tModLodaer_t(nn.Module):
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
         self.num_radial = num_radial
+        self.num_angular = num_angular
         self.radial_cutoff = radial_cutoff
         self.angle_cutoff = angle_cutoff
         self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
@@ -222,6 +225,7 @@ class tModLodaer_t(nn.Module):
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
                                     nbr_fea_len=nbr_fea_len,
                                     num_radial=num_radial,
+                                    num_angular=num_angular,
                                     device=self.device) for _ in range(n_layers)])
 
         self.transformers = nn.ModuleList([TransformerBlock(atom_fea_len) for _ in range(n_layers)])  
@@ -292,6 +296,7 @@ class tModLodaer(nn.Module):
         nbr_fea_len = CFG.edge_feature_len
         n_layers = CFG.n_layers
         num_radial = getattr(CFG, "num_radial", 16)
+        num_angular = getattr(CFG, "num_angular", 4)
         radial_cutoff = getattr(CFG, "radial_cutoff", 5.0)
         angle_cutoff = getattr(CFG, "angle_cutoff", 3.5)
         cutoff_coeff = getattr(CFG, "cutoff_coeff", 5)
@@ -301,6 +306,7 @@ class tModLodaer(nn.Module):
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
         self.num_radial = num_radial
+        self.num_angular = num_angular
         self.radial_cutoff = radial_cutoff
         self.angle_cutoff = angle_cutoff
         self.atom_embedding = nn.Embedding(95, atom_fea_len, max_norm=True)
@@ -318,6 +324,7 @@ class tModLodaer(nn.Module):
         self.three = nn.ModuleList([ThreeBody(atom_fea_len=atom_fea_len,
                                     nbr_fea_len=nbr_fea_len,
                                     num_radial=num_radial,
+                                    num_angular=num_angular,
                                     device=self.device) for _ in range(n_layers)])
 
         self.edge_updates = nn.ModuleList(EdgeUpdate(atom_fea_len, nbr_fea_len, num_radial)
