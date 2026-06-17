@@ -1,5 +1,6 @@
 import pytest
 import torch
+import torch.nn as nn
 
 from gptff.model import GPTFFNet, GPTFFNetConfig
 from gptff.model.embedding import (
@@ -120,6 +121,26 @@ def test_non_transformer_model_uses_embedding_modules():
     assert isinstance(model.edge_embedding, EdgeEmbedding)
     assert isinstance(model.edge_modulation, EdgeModulationProjection)
     assert isinstance(model.triplet_modulation, TripletModulationProjection)
+    assert isinstance(model.final_atom_norm, nn.LayerNorm)
     assert not hasattr(model, "w_b")
     assert not hasattr(model, "w_eij")
     assert not hasattr(model, "w_r")
+
+
+def test_non_transformer_model_can_disable_final_atom_norm():
+    cfg = GPTFFNetConfig(
+        node_feature_len=8,
+        edge_feature_len=8,
+        n_layers=1,
+        num_radial=8,
+        num_angular=4,
+        radial_cutoff=3.0,
+        angle_cutoff=3.0,
+        cutoff_coeff=5,
+        max_atomic_number=94,
+        final_atom_norm=False,
+    )
+
+    model = GPTFFNet(cfg)
+
+    assert isinstance(model.final_atom_norm, nn.Identity)

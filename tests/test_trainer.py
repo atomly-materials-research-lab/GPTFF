@@ -34,6 +34,7 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.element_refs == "atomly"
     assert config.n_readout_layers == 4
     assert config.readout_zero_init is True
+    assert config.final_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.residual_scale == pytest.approx(0.5)
     assert config.residual_zero_init is True
@@ -93,6 +94,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert isinstance(model_config, GPTFFNetConfig)
     assert model_config.n_readout_layers == 4
     assert model_config.readout_zero_init is True
+    assert model_config.final_atom_norm is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
     assert model_config.residual_scale == pytest.approx(0.5)
     assert model_config.residual_zero_init is True
@@ -148,6 +150,7 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_name"] == "GPTFFNet"
     assert state["model_config"]["n_readout_layers"] == 4
     assert state["model_config"]["readout_zero_init"] is True
+    assert state["model_config"]["final_atom_norm"] is True
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["residual_scale"] == pytest.approx(0.5)
     assert state["model_config"]["residual_zero_init"] is True
@@ -339,6 +342,7 @@ def _raw_config():
             "element_ref_ridge": 0.0,
             "n_readout_layers": 4,
             "readout_zero_init": True,
+            "final_atom_norm": True,
             "interaction_dropout": 0.1,
             "residual_scale": 0.5,
             "residual_zero_init": True,

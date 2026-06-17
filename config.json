@@ -19,6 +19,7 @@
         "n_layers": 3,
         "n_readout_layers": 3,
         "readout_zero_init": true,
+        "final_atom_norm": true,
         "interaction_dropout": 0.0,
         "residual_scale": 1.0,
         "residual_zero_init": true,

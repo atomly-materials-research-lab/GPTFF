@@ -20,6 +20,7 @@ class GPTFFNetConfig:
     element_refs: Any = None
     n_readout_layers: int = 3
     readout_zero_init: bool = True
+    final_atom_norm: bool = True
     interaction_dropout: float = 0.0
     residual_scale: float = 1.0
     residual_zero_init: bool = True
@@ -71,6 +72,7 @@ class GPTFFNetConfig:
             element_refs=raw_config.get("element_refs", None),
             n_readout_layers=int(raw_config.get("n_readout_layers", 3)),
             readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
+            final_atom_norm=bool(raw_config.get("final_atom_norm", True)),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
             residual_scale=float(raw_config.get("residual_scale", 1.0)),
             residual_zero_init=bool(raw_config.get("residual_zero_init", True)),

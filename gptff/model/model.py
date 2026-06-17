@@ -291,6 +291,11 @@ class GPTFFNet(nn.Module):
         self.triplet_modulation = TripletModulationProjection(nbr_fea_len, num_radial)
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
         self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
+        self.final_atom_norm = (
+            nn.LayerNorm(atom_fea_len)
+            if config.final_atom_norm
+            else nn.Identity()
+        )
 
         self.interactions = nn.ModuleList([
             InteractionBlock(
@@ -334,4 +339,5 @@ class GPTFFNet(nn.Module):
                 triplet_modulation,
             )
 
+        atom_fea = self.final_atom_norm(atom_fea)
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
