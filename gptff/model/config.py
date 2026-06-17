@@ -22,6 +22,7 @@ class GPTFFNetConfig:
     readout_zero_init: bool = True
     interaction_dropout: float = 0.0
     residual_scale: float = 1.0
+    residual_zero_init: bool = True
     aggregation_norm: str = "sqrt"
 
     def __post_init__(self) -> None:
@@ -72,6 +73,7 @@ class GPTFFNetConfig:
             readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
             residual_scale=float(raw_config.get("residual_scale", 1.0)),
+            residual_zero_init=bool(raw_config.get("residual_zero_init", True)),
             aggregation_norm=str(raw_config.get("aggregation_norm", "sqrt")),
         )
 

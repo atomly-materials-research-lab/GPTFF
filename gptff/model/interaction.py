@@ -11,7 +11,15 @@ from gptff.model.mlp import GatedMLP, MLP
 
 
 class EdgeUpdate(nn.Module):
-    def __init__(self, atom_fea_len, nbr_fea_len, num_radial=None, *, dropout=0.0):
+    def __init__(
+        self,
+        atom_fea_len,
+        nbr_fea_len,
+        num_radial=None,
+        *,
+        dropout=0.0,
+        zero_init_output=True,
+    ):
         super().__init__()
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
@@ -30,6 +38,7 @@ class EdgeUpdate(nn.Module):
             nbr_fea_len,
             dropout=dropout,
             activate_output=True,
+            zero_init_output=zero_init_output,
         )
 
     def forward(self, atom_fea, edge_ij, graph, edge_modulation):
@@ -58,6 +67,7 @@ class ThreeBodyEdgeDelta(nn.Module):
         *,
         dropout=0.0,
         aggregation_norm="sqrt",
+        zero_init_output=True,
     ):
         super().__init__()
         self.nbr_fea_len = nbr_fea_len
@@ -70,7 +80,12 @@ class ThreeBodyEdgeDelta(nn.Module):
             dropout=dropout,
             activate_output=True,
         )
-        self.triplet_gate = GatedMLP(nbr_fea_len, nbr_fea_len, dropout=dropout)
+        self.triplet_gate = GatedMLP(
+            nbr_fea_len,
+            nbr_fea_len,
+            dropout=dropout,
+            zero_init_output=zero_init_output,
+        )
 
     def forward(self, edge_ij, graph, edge_modulation):
         if graph.triplet_edge_index.numel() == 0:
@@ -108,6 +123,7 @@ class AtomFeatureDelta(nn.Module):
         *,
         dropout=0.0,
         aggregation_norm="sqrt",
+        zero_init_output=True,
     ):
         super().__init__()
         self.atom_fea_len = atom_fea_len
@@ -119,7 +135,12 @@ class AtomFeatureDelta(nn.Module):
             dropout=dropout,
             activate_output=True,
         )
-        self.message_gate = GatedMLP(2 * atom_fea_len, atom_fea_len, dropout=dropout)
+        self.message_gate = GatedMLP(
+            2 * atom_fea_len,
+            atom_fea_len,
+            dropout=dropout,
+            zero_init_output=zero_init_output,
+        )
 
     def forward(self, atom_fea, edge_ij, edge_modulation, graph):
         atom_nbr_fea = torch.cat([
@@ -149,12 +170,14 @@ class InteractionBlock(nn.Module):
         dropout=0.0,
         residual_scale=1.0,
         aggregation_norm="sqrt",
+        residual_zero_init=True,
     ):
         super().__init__()
         if residual_scale < 0:
             raise ValueError("residual_scale must be non-negative.")
 
         self.residual_scale = float(residual_scale)
+        self.residual_zero_init = bool(residual_zero_init)
         self.aggregation_norm = validate_aggregation_norm(aggregation_norm)
         self.residual_dropout = nn.Dropout(dropout)
         self.three_body = ThreeBodyEdgeDelta(
@@ -162,13 +185,20 @@ class InteractionBlock(nn.Module):
             num_angular=num_angular,
             dropout=dropout,
             aggregation_norm=self.aggregation_norm,
+            zero_init_output=self.residual_zero_init,
         )
-        self.edge_update = EdgeUpdate(atom_fea_len, nbr_fea_len, dropout=dropout)
+        self.edge_update = EdgeUpdate(
+            atom_fea_len,
+            nbr_fea_len,
+            dropout=dropout,
+            zero_init_output=self.residual_zero_init,
+        )
         self.atom_update = AtomFeatureDelta(
             atom_fea_len,
             nbr_fea_len,
             dropout=dropout,
             aggregation_norm=self.aggregation_norm,
+            zero_init_output=self.residual_zero_init,
         )
         self.pair_atom_norm = nn.LayerNorm(atom_fea_len)
         self.atom_norm = nn.LayerNorm(atom_fea_len)

@@ -49,6 +49,7 @@ def test_non_transformer_model_uses_interaction_blocks():
     assert not hasattr(model.interactions[0], "pair_edge_norm")
     assert not hasattr(model.interactions[0], "atom_edge_norm")
     assert model.interactions[0].residual_scale == 1.0
+    assert model.interactions[0].residual_zero_init is True
     assert model.interactions[0].aggregation_norm == "sqrt"
 
 
@@ -204,6 +205,41 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
 
     assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
     assert torch.equal(pair_delta, torch.zeros_like(pair_delta))
+    assert torch.equal(atom_delta, torch.zeros_like(atom_delta))
+
+
+def test_residual_deltas_are_zero_initialized_by_default():
+    graph = _batch()
+    model = GPTFFNet(_cfg())
+    block = model.interactions[0]
+
+    atom_fea = model.atom_embedding(graph.atom_types)
+    edge_basis = model.edge_rbf(graph.edge_lengths)
+    angle_edge_basis = model.angle_edge_rbf(graph.edge_lengths)
+    edge_modulation = model.edge_modulation(edge_basis)
+    triplet_modulation = model.triplet_modulation(angle_edge_basis)
+    edge_ij = model.edge_embedding(edge_basis)
+
+    pair_delta = block.edge_update(
+        block.pair_atom_norm(atom_fea),
+        edge_ij,
+        graph,
+        edge_modulation.edge,
+    )
+    triplet_delta = block.three_body(
+        edge_ij,
+        graph,
+        triplet_modulation,
+    )
+    atom_delta = block.atom_update(
+        block.atom_norm(atom_fea),
+        edge_ij,
+        edge_modulation.atom,
+        graph,
+    )
+
+    assert torch.equal(pair_delta, torch.zeros_like(pair_delta))
+    assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
     assert torch.equal(atom_delta, torch.zeros_like(atom_delta))
 
 

@@ -299,6 +299,7 @@ class GPTFFNet(nn.Module):
                 num_angular=num_angular,
                 dropout=config.interaction_dropout,
                 residual_scale=config.residual_scale,
+                residual_zero_init=config.residual_zero_init,
                 aggregation_norm=config.aggregation_norm,
             )
             for _ in range(n_layers)

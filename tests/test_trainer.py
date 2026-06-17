@@ -36,6 +36,7 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.readout_zero_init is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.residual_scale == pytest.approx(0.5)
+    assert config.residual_zero_init is True
     assert config.aggregation_norm == "sqrt"
     assert config.checkpoint_path is None
     assert config.checkpoint_dict()["data_file"] == "data.csv"
@@ -94,6 +95,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.readout_zero_init is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
     assert model_config.residual_scale == pytest.approx(0.5)
+    assert model_config.residual_zero_init is True
     assert model_config.aggregation_norm == "sqrt"
     assert model_config.element_refs == "atomly"
     assert "batch_size" not in model_config.to_dict()
@@ -148,6 +150,7 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_config"]["readout_zero_init"] is True
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["residual_scale"] == pytest.approx(0.5)
+    assert state["model_config"]["residual_zero_init"] is True
     assert state["model_config"]["aggregation_norm"] == "sqrt"
     assert state["training_config"]["batch_size"] == 4
     assert state["training_config"]["cache_graphs"] is True
@@ -338,6 +341,7 @@ def _raw_config():
             "readout_zero_init": True,
             "interaction_dropout": 0.1,
             "residual_scale": 0.5,
+            "residual_zero_init": True,
             "aggregation_norm": "sqrt",
             "n_layers": 1,
             "warmup_steps": 0,

@@ -55,7 +55,14 @@ class MLP(nn.Module):
 
 
 class GatedMLP(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, *, dropout: float = 0.0):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        *,
+        dropout: float = 0.0,
+        zero_init_output: bool = False,
+    ):
         super().__init__()
         if dropout < 0 or dropout >= 1:
             raise ValueError("dropout must be in the range [0, 1).")
@@ -65,6 +72,9 @@ class GatedMLP(nn.Module):
         self.activation = nn.SiLU()
         self.sigmoid = nn.Sigmoid()
         self.dropout = nn.Dropout(dropout)
+        if zero_init_output:
+            nn.init.zeros_(self.value.weight)
+            nn.init.zeros_(self.value.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.dropout(self.activation(self.value(x)) * self.sigmoid(self.gate(x)))
