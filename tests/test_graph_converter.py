@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter, GraphSample, batch_samples
@@ -83,3 +84,27 @@ def test_batch_samples_collates_labels():
     assert batch.energy.tolist() == [-1.0]
     assert batch.forces.shape == (1, 3)
     assert batch.stress.shape == (1, 3, 3)
+
+
+def test_batch_samples_allows_missing_optional_labels():
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    sample = GraphSample(graph=graph, energy=-1.0)
+
+    batch = batch_samples([sample])
+
+    assert batch.energy.tolist() == [-1.0]
+    assert batch.forces is None
+    assert batch.stress is None
+
+
+def test_batch_samples_rejects_partially_missing_labels():
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    samples = [
+        GraphSample(graph=graph, energy=-1.0, stress=np.zeros((3, 3), dtype=np.float32)),
+        GraphSample(graph=graph, energy=-1.0),
+    ]
+
+    with pytest.raises(ValueError, match="partially missing stress"):
+        batch_samples(samples)

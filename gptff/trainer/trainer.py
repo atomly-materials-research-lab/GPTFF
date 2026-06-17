@@ -158,10 +158,12 @@ class TrainingConfig:
 @dataclass
 class BatchLoss:
     loss: torch.Tensor
-    energy_mae: torch.Tensor
-    force_mae: torch.Tensor
-    stress_mae: torch.Tensor
+    energy_mae: Optional[torch.Tensor]
+    force_mae: Optional[torch.Tensor]
+    stress_mae: Optional[torch.Tensor]
     batch_size: int
+    force_count: int = 0
+    stress_count: int = 0
 
 
 @dataclass
@@ -183,10 +185,10 @@ class EpochMetrics:
 
     def as_postfix(self) -> Dict[str, str]:
         return {
-            "loss": f"{self.loss.val:.5f} ({self.loss.avg:.5f})",
-            "MAE(e)": f"{self.energy_mae.val:.5f} ({self.energy_mae.avg:.5f})",
-            "MAE(f)": f"{self.force_mae.val:.5f} ({self.force_mae.avg:.5f})",
-            "MAE(s)": f"{self.stress_mae.val:.3f} ({self.stress_mae.avg:.3f})",
+            "loss": _format_meter(self.loss, precision=5),
+            "MAE(e)": _format_meter(self.energy_mae, precision=5),
+            "MAE(f)": _format_meter(self.force_mae, precision=5),
+            "MAE(s)": _format_meter(self.stress_mae, precision=3),
             "skip": str(self.skipped_batches),
         }
 
@@ -215,6 +217,34 @@ class AverageMeter:
         self.sum += float(val) * n
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0.0
+
+
+def _format_meter(meter: AverageMeter, precision: int) -> str:
+    if meter.count == 0:
+        return "n/a"
+    return f"{meter.val:.{precision}f} ({meter.avg:.{precision}f})"
+
+
+def _format_meter_avg(meter: AverageMeter, precision: int) -> str:
+    if meter.count == 0:
+        return "n/a"
+    return f"{meter.avg:.{precision}f}"
+
+
+def _meter_avg_or_nan(meter: AverageMeter) -> float:
+    return meter.avg if meter.count > 0 else float("nan")
+
+
+def select_validation_metric(metrics: EpochMetrics) -> float:
+    for meter in (
+        metrics.energy_mae,
+        metrics.force_mae,
+        metrics.stress_mae,
+        metrics.loss,
+    ):
+        if meter.count > 0:
+            return meter.avg
+    return float("inf")
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -372,6 +402,26 @@ def mae(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return torch.mean(torch.abs(target - prediction))
 
 
+def loss_weight_active(weight: float) -> bool:
+    return float(weight) > 0.0
+
+
+def validate_required_labels(batch, config: TrainingConfig) -> None:
+    active_terms = [
+        loss_weight_active(config.w1),
+        loss_weight_active(config.w2),
+        loss_weight_active(config.w3),
+    ]
+    if not any(active_terms):
+        raise ValueError("At least one loss weight must be positive.")
+    if active_terms[0] and batch.energy is None:
+        raise ValueError("energy labels are required when weight_energy > 0.")
+    if active_terms[1] and batch.forces is None:
+        raise ValueError("force labels are required when weight_force > 0.")
+    if active_terms[2] and batch.stress is None:
+        raise ValueError("stress labels are required when weight_stress > 0.")
+
+
 def compute_batch_loss(
     model: torch.nn.Module,
     batch,
@@ -380,27 +430,53 @@ def compute_batch_loss(
     *,
     create_graph: bool,
 ) -> BatchLoss:
+    validate_required_labels(batch, config)
+    compute_forces = loss_weight_active(config.w2)
+    compute_stress = loss_weight_active(config.w3)
+
     energy_pred, force_pred, stress_pred = predict_energy_forces_stress(
         model,
         batch,
         unit_trans=config.unit_trans,
         create_graph=create_graph,
+        compute_forces=compute_forces,
+        compute_stress=compute_stress,
     )
-    num_atoms = batch.num_atoms.to(dtype=energy_pred.dtype)
-    energy_pred = energy_pred.view(-1) / num_atoms
-    target_energy = batch.energy.view(-1) / num_atoms
+    loss = energy_pred.new_zeros(())
+    energy_mae = None
+    force_mae = None
+    stress_mae = None
+    force_count = 0
+    stress_count = 0
 
-    energy_loss = criterion(energy_pred, target_energy)
-    force_loss = criterion(force_pred.reshape(-1), batch.forces.reshape(-1))
-    stress_loss = criterion(stress_pred.reshape(-1), batch.stress.reshape(-1))
-    loss = config.w1 * energy_loss + config.w2 * force_loss + config.w3 * stress_loss
+    if loss_weight_active(config.w1):
+        num_atoms = batch.num_atoms.to(dtype=energy_pred.dtype)
+        energy_per_atom = energy_pred.view(-1) / num_atoms
+        target_energy = batch.energy.view(-1) / num_atoms
+        energy_loss = criterion(energy_per_atom, target_energy)
+        loss = loss + config.w1 * energy_loss
+        energy_mae = mae(energy_per_atom.detach(), target_energy.detach())
+
+    if compute_forces:
+        force_loss = criterion(force_pred.reshape(-1), batch.forces.reshape(-1))
+        loss = loss + config.w2 * force_loss
+        force_mae = mae(force_pred.detach().reshape(-1), batch.forces.detach().reshape(-1))
+        force_count = int(batch.forces.numel())
+
+    if compute_stress:
+        stress_loss = criterion(stress_pred.reshape(-1), batch.stress.reshape(-1))
+        loss = loss + config.w3 * stress_loss
+        stress_mae = mae(stress_pred.detach().reshape(-1), batch.stress.detach().reshape(-1))
+        stress_count = int(batch.stress.numel())
 
     return BatchLoss(
         loss=loss,
-        energy_mae=mae(energy_pred.detach(), target_energy.detach()),
-        force_mae=mae(force_pred.detach().reshape(-1), batch.forces.detach().reshape(-1)),
-        stress_mae=mae(stress_pred.detach().reshape(-1), batch.stress.detach().reshape(-1)),
-        batch_size=int(target_energy.shape[0]),
+        energy_mae=energy_mae,
+        force_mae=force_mae,
+        stress_mae=stress_mae,
+        batch_size=int(batch.num_atoms.shape[0]),
+        force_count=force_count,
+        stress_count=stress_count,
     )
 
 
@@ -414,9 +490,12 @@ def should_skip_batch(batch_loss: BatchLoss, config: TrainingConfig) -> bool:
 
 def update_metrics(metrics: EpochMetrics, batch_loss: BatchLoss) -> None:
     metrics.loss.update(batch_loss.loss.detach().cpu().item(), batch_loss.batch_size)
-    metrics.energy_mae.update(batch_loss.energy_mae.cpu().item(), batch_loss.batch_size)
-    metrics.force_mae.update(batch_loss.force_mae.cpu().item(), batch_loss.batch_size)
-    metrics.stress_mae.update(batch_loss.stress_mae.cpu().item(), batch_loss.batch_size * 9)
+    if batch_loss.energy_mae is not None:
+        metrics.energy_mae.update(batch_loss.energy_mae.cpu().item(), batch_loss.batch_size)
+    if batch_loss.force_mae is not None:
+        metrics.force_mae.update(batch_loss.force_mae.cpu().item(), batch_loss.force_count)
+    if batch_loss.stress_mae is not None:
+        metrics.stress_mae.update(batch_loss.stress_mae.cpu().item(), batch_loss.stress_count)
 
 
 def train_one_epoch(
@@ -509,9 +588,9 @@ def validate(
 def append_validation_history(output_dir: Path, metrics: EpochMetrics) -> None:
     with open(output_dir / "val_history.txt", "a+") as fp:
         fp.write(
-            f"{metrics.energy_mae.avg:.4f} "
-            f"{metrics.force_mae.avg:.4f} "
-            f"{metrics.stress_mae.avg:.4f}\n"
+            f"{_meter_avg_or_nan(metrics.energy_mae):.4f} "
+            f"{_meter_avg_or_nan(metrics.force_mae):.4f} "
+            f"{_meter_avg_or_nan(metrics.stress_mae):.4f}\n"
         )
 
 
@@ -627,10 +706,10 @@ def run_training(config: TrainingConfig) -> float:
             progress=pbar_val,
         )
         pbar_train.set_postfix_str(
-            f"val_loss: {val_metrics.loss.avg:.5f} "
-            f"val_MAE(e): {val_metrics.energy_mae.avg:.5f}, "
-            f"val_MAE(f): {val_metrics.force_mae.avg:.5f}, "
-            f"val_MAE(s): {val_metrics.stress_mae.avg:.3f}"
+            f"val_loss: {_format_meter_avg(val_metrics.loss, 5)} "
+            f"val_MAE(e): {_format_meter_avg(val_metrics.energy_mae, 5)}, "
+            f"val_MAE(f): {_format_meter_avg(val_metrics.force_mae, 5)}, "
+            f"val_MAE(s): {_format_meter_avg(val_metrics.stress_mae, 3)}"
         )
         pbar_train.close()
         pbar_val.close()
@@ -638,8 +717,9 @@ def run_training(config: TrainingConfig) -> float:
         append_validation_history(output_dir, val_metrics)
         scheduler.step()
 
-        is_best = val_metrics.energy_mae.avg < best_mae_error
-        best_mae_error = min(val_metrics.energy_mae.avg, best_mae_error)
+        validation_metric = select_validation_metric(val_metrics)
+        is_best = validation_metric < best_mae_error
+        best_mae_error = min(validation_metric, best_mae_error)
         save_checkpoint(
             output_dir,
             model,

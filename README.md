@@ -237,7 +237,12 @@ The file `config.json` includes training settings,
 - stress_sign: Sign multiplier for stress labels before conversion to GPa.
 - weight_energy: Weight factor of the energy
 - weight_force: Weight factor of the forces
-- weight_stress: Weight factor of the stress, if there's not stress data, please set it to `0`
+- weight_stress: Weight factor of the stress
+
+Label columns are required only when their corresponding loss weight is positive.
+For energy-only data, set `weight_force` and `weight_stress` to `0`.
+For energy-force data without stress, set `weight_stress` to `0`.
+Within one batch, each enabled label type must be present for every sample.
 
 ## Reference
 

@@ -3,7 +3,10 @@ from __future__ import division, print_function
 import ast
 import functools
 import math
+from typing import Any
 
+import numpy as np
+import pandas as pd
 import torch
 from pymatgen.core.structure import Structure
 from torch.optim.lr_scheduler import _LRScheduler
@@ -46,19 +49,9 @@ class StructureDataset(Dataset):
             graph = self.converter.convert(structure)
             return GraphSample(
                 graph=graph,
-                energy=convert_energy_to_ev(
-                    row["energy"],
-                    unit=self.label_config.energy_unit,
-                ),
-                forces=convert_forces_to_ev_per_ang(
-                    ast.literal_eval(row["forces"]),
-                    unit=self.label_config.force_unit,
-                ),
-                stress=convert_stress_to_gpa(
-                    ast.literal_eval(row["stress"]),
-                    unit=self.label_config.stress_unit,
-                    sign=self.label_config.stress_sign,
-                ),
+                energy=_load_energy(row, self.label_config),
+                forces=_load_forces(row, self.label_config),
+                stress=_load_stress(row, self.label_config),
             )
         except Exception as exc:
             raise ValueError(f"Failed to load structure row {idx}.") from exc
@@ -66,6 +59,57 @@ class StructureDataset(Dataset):
 
 def collate_graph_samples(samples):
     return batch_samples(samples)
+
+
+def _load_energy(row, label_config: LabelConfig):
+    if not _has_label_value(row, "energy"):
+        return None
+    return convert_energy_to_ev(
+        row["energy"],
+        unit=label_config.energy_unit,
+    )
+
+
+def _load_forces(row, label_config: LabelConfig):
+    if not _has_label_value(row, "forces"):
+        return None
+    return convert_forces_to_ev_per_ang(
+        _literal_eval_if_needed(row["forces"]),
+        unit=label_config.force_unit,
+    )
+
+
+def _load_stress(row, label_config: LabelConfig):
+    if not _has_label_value(row, "stress"):
+        return None
+    return convert_stress_to_gpa(
+        _literal_eval_if_needed(row["stress"]),
+        unit=label_config.stress_unit,
+        sign=label_config.stress_sign,
+    )
+
+
+def _has_label_value(row, column: str) -> bool:
+    if column not in row.index:
+        return False
+    value = row[column]
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "none", "null", "nan"}
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(missing, (bool, np.bool_)):
+        return not bool(missing)
+    return not bool(np.asarray(missing).any())
+
+
+def _literal_eval_if_needed(value: Any) -> Any:
+    if isinstance(value, str):
+        return ast.literal_eval(value)
+    return value
 
 
 class CosineAnnealingWarmupRestarts(_LRScheduler):

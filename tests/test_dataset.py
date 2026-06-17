@@ -28,3 +28,20 @@ def test_structure_dataset_converts_stress_with_label_config():
     assert sample.energy == -1.0
     assert sample.forces.shape == (1, 3)
     assert np.allclose(sample.stress, -0.1 * np.eye(3, dtype=np.float32))
+
+
+def test_structure_dataset_allows_missing_force_and_stress_columns():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    df = pd.DataFrame([
+        {
+            "structure": repr(structure.as_dict()),
+            "energy": -1.0,
+        }
+    ])
+    dataset = StructureDataset(df, r_cut=2.0, a_cut=2.0)
+
+    sample = dataset[0]
+
+    assert sample.energy == -1.0
+    assert sample.forces is None
+    assert sample.stress is None

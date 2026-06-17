@@ -35,9 +35,9 @@ class CrystalGraph:
 @dataclass(frozen=True)
 class GraphSample:
     graph: CrystalGraph
-    energy: float
-    forces: np.ndarray
-    stress: np.ndarray
+    energy: Optional[float] = None
+    forces: Optional[np.ndarray] = None
+    stress: Optional[np.ndarray] = None
 
 
 @dataclass(frozen=True)
@@ -121,9 +121,17 @@ class CrystalGraphBatch:
         }
         return type(self)(**fields)
 
-    def with_geometry(self) -> "DifferentiableGraphBatch":
-        positions = self.positions.detach().clone().requires_grad_(True)
-        strain = torch.zeros_like(self.lattice, dtype=self.lattice.dtype).requires_grad_(True)
+    def with_geometry(
+        self,
+        *,
+        positions_requires_grad: bool = True,
+        strain_requires_grad: bool = True,
+    ) -> "DifferentiableGraphBatch":
+        positions = self.positions.detach().clone().requires_grad_(positions_requires_grad)
+        strain = torch.zeros_like(
+            self.lattice,
+            dtype=self.lattice.dtype,
+        ).requires_grad_(strain_requires_grad)
         eye = torch.eye(3, dtype=self.lattice.dtype, device=self.lattice.device)
 
         strained_lattice = self.lattice @ (eye.unsqueeze(0) + strain)
@@ -201,9 +209,21 @@ def batch_graphs(graphs: Sequence[CrystalGraph]) -> CrystalGraphBatch:
 def batch_samples(samples: Sequence[GraphSample]) -> CrystalGraphBatch:
     return CrystalGraphBatch.from_graphs(
         [sample.graph for sample in samples],
-        energies=[sample.energy for sample in samples],
-        forces=[sample.forces for sample in samples],
-        stresses=[sample.stress for sample in samples],
+        energies=_collect_optional_sample_field(samples, "energy"),
+        forces=_collect_optional_sample_field(samples, "forces"),
+        stresses=_collect_optional_sample_field(samples, "stress"),
+    )
+
+
+def _collect_optional_sample_field(samples: Sequence[GraphSample], field_name: str):
+    values = [getattr(sample, field_name) for sample in samples]
+    present = [value is not None for value in values]
+    if all(present):
+        return values
+    if not any(present):
+        return None
+    raise ValueError(
+        f"Cannot batch samples with partially missing {field_name} labels."
     )
 
 

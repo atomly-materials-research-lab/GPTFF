@@ -3,11 +3,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from pymatgen.core import Lattice, Structure
 
+from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFNetConfig
 from gptff.trainer.trainer import (
     TrainingConfig,
     apply_fitted_element_refs,
+    compute_batch_loss,
     load_training_checkpoint,
     resolve_checkpoint_path,
     save_checkpoint,
@@ -179,6 +182,73 @@ def test_load_training_checkpoint_rejects_missing_file(tmp_path):
             optimizer,
             device="cpu",
         )
+
+
+def test_compute_batch_loss_allows_energy_only_batches():
+    config = TrainingConfig.from_dict(_raw_config())
+    config.w2 = 0.0
+    config.w3 = 0.0
+
+    batch_loss = compute_batch_loss(
+        _ConstantEnergyModel(),
+        _energy_only_batch(),
+        torch.nn.HuberLoss(),
+        config,
+        create_graph=False,
+    )
+
+    assert torch.isfinite(batch_loss.loss)
+    assert batch_loss.energy_mae is not None
+    assert batch_loss.force_mae is None
+    assert batch_loss.stress_mae is None
+    assert batch_loss.force_count == 0
+    assert batch_loss.stress_count == 0
+
+
+def test_compute_batch_loss_requires_active_labels():
+    config = TrainingConfig.from_dict(_raw_config())
+    config.w2 = 0.0
+    config.w3 = 1.0
+
+    with pytest.raises(ValueError, match="stress labels are required"):
+        compute_batch_loss(
+            _ConstantEnergyModel(),
+            _energy_only_batch(),
+            torch.nn.HuberLoss(),
+            config,
+            create_graph=False,
+        )
+
+
+def test_compute_batch_loss_rejects_all_zero_weights():
+    config = TrainingConfig.from_dict(_raw_config())
+    config.w1 = 0.0
+    config.w2 = 0.0
+    config.w3 = 0.0
+
+    with pytest.raises(ValueError, match="At least one loss weight"):
+        compute_batch_loss(
+            _ConstantEnergyModel(),
+            _energy_only_batch(),
+            torch.nn.HuberLoss(),
+            config,
+            create_graph=False,
+        )
+
+
+class _ConstantEnergyModel(torch.nn.Module):
+    def forward(self, graph):
+        return torch.zeros(
+            (graph.num_atoms.shape[0], 1),
+            dtype=graph.positions.dtype,
+            device=graph.positions.device,
+        )
+
+
+def _energy_only_batch():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.0, a_cut=2.0).convert(structure)
+    return CrystalGraphBatch.from_graphs([graph], energies=[-1.0])
 
 
 def _sample(atom_types, energy):

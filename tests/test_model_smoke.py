@@ -59,6 +59,28 @@ def test_prediction_uses_model_total_energy():
     assert stress.shape == (1, 3, 3)
 
 
+def test_prediction_can_skip_force_and_stress_derivatives():
+    structure = Structure(
+        Lattice.cubic(3.0),
+        ["Na", "Cl"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    )
+    graph = CrystalGraphConverter(r_cut=3.0, a_cut=3.0).convert(structure)
+    batch = CrystalGraphBatch.from_graphs([graph])
+
+    energy, forces, stress = predict_energy_forces_stress(
+        GeometryEnergyModel(),
+        batch,
+        create_graph=False,
+        compute_forces=False,
+        compute_stress=False,
+    )
+
+    assert torch.allclose(energy, torch.tensor([4.5]))
+    assert forces is None
+    assert stress is None
+
+
 class GeometryEnergyModel(torch.nn.Module):
     def forward(self, graph):
         site_energy = graph.positions.sum(dim=1, keepdim=True)
