@@ -43,11 +43,11 @@ def test_non_transformer_model_uses_interaction_blocks():
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
-    assert isinstance(model.interactions[0].triplet_edge_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].pair_atom_norm, nn.LayerNorm)
-    assert isinstance(model.interactions[0].pair_edge_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].atom_norm, nn.LayerNorm)
-    assert isinstance(model.interactions[0].atom_edge_norm, nn.LayerNorm)
+    assert not hasattr(model.interactions[0], "triplet_edge_norm")
+    assert not hasattr(model.interactions[0], "pair_edge_norm")
+    assert not hasattr(model.interactions[0], "atom_edge_norm")
     assert model.interactions[0].residual_scale == 1.0
     assert model.interactions[0].aggregation_norm == "sqrt"
 
@@ -185,19 +185,19 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
     zero_triplet_modulation = torch.zeros_like(edge_ij)
 
     triplet_delta = block.three_body(
-        block.triplet_edge_norm(edge_ij),
+        edge_ij,
         graph,
         zero_triplet_modulation,
     )
     pair_delta = block.edge_update(
         block.pair_atom_norm(atom_fea),
-        block.pair_edge_norm(edge_ij),
+        edge_ij,
         graph,
         zero_modulation.edge,
     )
     atom_delta = block.atom_update(
         block.atom_norm(atom_fea),
-        block.atom_edge_norm(edge_ij),
+        edge_ij,
         zero_modulation.atom,
         graph,
     )
@@ -212,10 +212,7 @@ def test_interaction_block_updates_pair_then_triplet_then_atom():
     model = GPTFFNet(_cfg())
     block = model.interactions[0]
     block.pair_atom_norm = nn.Identity()
-    block.pair_edge_norm = nn.Identity()
-    block.triplet_edge_norm = nn.Identity()
     block.atom_norm = nn.Identity()
-    block.atom_edge_norm = nn.Identity()
     block.edge_update = _ConstantPairDelta(value=1.0)
     block.three_body = _ConstantTripletDelta(value=2.0)
     block.atom_update = _RecordingAtomDelta()

@@ -23,7 +23,7 @@ def test_atom_embedding_rejects_invalid_atomic_numbers():
         embedding(torch.tensor([1, 11], dtype=torch.long))
 
 
-def test_edge_embedding_returns_normalized_edge_features():
+def test_edge_embedding_returns_edge_features():
     edge_embedding = EdgeEmbedding(nbr_fea_len=6, num_radial=4)
     edge_basis = torch.randn(3, 4)
 
@@ -31,6 +31,22 @@ def test_edge_embedding_returns_normalized_edge_features():
 
     assert edge_fea.shape == (3, 6)
     assert torch.isfinite(edge_fea).all()
+
+
+def test_edge_embedding_preserves_radial_basis_scale():
+    edge_embedding = EdgeEmbedding(nbr_fea_len=6, num_radial=4)
+    with torch.no_grad():
+        for layer in edge_embedding.edge_embedding:
+            if isinstance(layer, torch.nn.Linear):
+                layer.weight.fill_(1.0)
+
+    edge_basis = torch.ones(3, 4)
+    small_edge_basis = 0.01 * edge_basis
+
+    edge_fea = edge_embedding(edge_basis)
+    small_edge_fea = edge_embedding(small_edge_basis)
+
+    assert small_edge_fea.norm() < edge_fea.norm()
 
 
 def test_edge_embedding_preserves_zero_basis():

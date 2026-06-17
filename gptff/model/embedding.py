@@ -54,18 +54,13 @@ class TripletModulationProjection(nn.Module):
 
 
 class EdgeEmbedding(nn.Module):
-    def __init__(self, nbr_fea_len, num_radial, normalize=True):
+    def __init__(self, nbr_fea_len, num_radial):
         super().__init__()
         self.edge_embedding = nn.Sequential(
             nn.Linear(num_radial, nbr_fea_len, bias=False),
             nn.SiLU(),
             nn.Linear(nbr_fea_len, nbr_fea_len, bias=False),
         )
-        self.norm = (
-            nn.LayerNorm(nbr_fea_len, elementwise_affine=False)
-            if normalize
-            else nn.Identity()
-        )
 
     def forward(self, edge_basis):
-        return self.norm(self.edge_embedding(edge_basis))
+        return self.edge_embedding(edge_basis)
