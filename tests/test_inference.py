@@ -6,8 +6,8 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
+from gptff.inference import predict_energy_forces_stress
 from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.prediction import predict_energy_forces_stress
 
 
 def test_prediction_returns_zero_unused_geometry_gradients():
@@ -35,6 +35,7 @@ def test_prediction_returns_zero_unused_geometry_gradients():
         model,
         batch,
         create_graph=True,
+        compute_stress=True,
     )
 
     assert graph.num_edges == 0
@@ -69,6 +70,54 @@ def test_force_matches_position_finite_difference():
     )
 
 
+def test_inference_outputs_energy_forces_and_stress_by_default():
+    graph = _two_atom_graph()
+    batch = CrystalGraphBatch.from_graphs([graph])
+    model = EdgeLengthEnergyModel()
+
+    energy, forces, stress = predict_energy_forces_stress(model, batch)
+
+    assert energy is not None
+    assert forces is not None
+    assert stress is not None
+    assert forces.requires_grad is False
+    assert stress.requires_grad is False
+
+
+def test_inference_can_explicitly_skip_stress():
+    graph = _two_atom_graph()
+    batch = CrystalGraphBatch.from_graphs([graph])
+    model = EdgeLengthEnergyModel()
+
+    _, forces, stress = predict_energy_forces_stress(
+        model,
+        batch,
+        compute_stress=False,
+    )
+
+    assert forces is not None
+    assert stress is None
+
+
+def test_inference_does_not_retain_autograd_graph_by_default(monkeypatch):
+    graph = _two_atom_graph()
+    batch = CrystalGraphBatch.from_graphs([graph])
+    model = EdgeLengthEnergyModel()
+    captured_kwargs = {}
+    original_grad = torch.autograd.grad
+
+    def recording_grad(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_grad(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", recording_grad)
+
+    predict_energy_forces_stress(model, batch)
+
+    assert captured_kwargs["create_graph"] is False
+    assert captured_kwargs["retain_graph"] is False
+
+
 def test_stress_matches_strain_finite_difference():
     graph = _two_atom_graph()
     batch = CrystalGraphBatch.from_graphs([graph])
@@ -79,7 +128,7 @@ def test_stress_matches_strain_finite_difference():
         batch,
         unit_trans=1.0,
         create_graph=False,
-        compute_forces=False,
+        compute_stress=True,
     )
 
     strain_i = 0
@@ -143,7 +192,6 @@ def _energy(model, graph):
         model,
         batch,
         create_graph=False,
-        compute_forces=False,
         compute_stress=False,
     )
     return energy.item()

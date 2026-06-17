@@ -1,5 +1,5 @@
 from gptff.graph.converter import CrystalGraphConverter, enumerate_triplets
-from gptff.graph.data import (
+from gptff.graph.containers import (
     CrystalGraph,
     CrystalGraphBatch,
     DifferentiableGraphBatch,

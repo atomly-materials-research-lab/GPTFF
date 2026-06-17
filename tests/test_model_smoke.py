@@ -3,8 +3,8 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
+from gptff.inference import predict_energy_forces_stress
 from gptff.model import GPTFFNet, GPTFFNetConfig
-from gptff.model.prediction import predict_energy_forces_stress
 
 
 def test_model_forward_and_efs_with_smooth_radial_basis():
@@ -30,6 +30,7 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
         GPTFFNet(cfg),
         batch,
         create_graph=True,
+        compute_stress=True,
     )
 
     assert energy.shape == (1,)
@@ -97,6 +98,7 @@ def test_prediction_uses_model_total_energy():
         GeometryEnergyModel(),
         batch,
         create_graph=True,
+        compute_stress=True,
     )
 
     assert torch.allclose(energy, torch.tensor([4.5]))
@@ -104,7 +106,7 @@ def test_prediction_uses_model_total_energy():
     assert stress.shape == (1, 3, 3)
 
 
-def test_prediction_can_skip_force_and_stress_derivatives():
+def test_prediction_can_skip_stress_derivatives():
     structure = Structure(
         Lattice.cubic(3.0),
         ["Na", "Cl"],
@@ -117,12 +119,11 @@ def test_prediction_can_skip_force_and_stress_derivatives():
         GeometryEnergyModel(),
         batch,
         create_graph=False,
-        compute_forces=False,
         compute_stress=False,
     )
 
     assert torch.allclose(energy, torch.tensor([4.5]))
-    assert forces is None
+    assert forces.shape == (2, 3)
     assert stress is None
 
 

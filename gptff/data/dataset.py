@@ -11,7 +11,7 @@ from pymatgen.core.structure import Structure
 from torch.utils.data import Dataset
 
 from gptff.graph import CrystalGraphConverter, GraphSample, batch_samples
-from gptff.utils_.labels import (
+from gptff.utils.labels import (
     LabelConfig,
     convert_energy_to_ev,
     convert_forces_to_ev_per_ang,

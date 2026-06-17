@@ -27,8 +27,8 @@ def build_datasets(config: TrainingConfig) -> Tuple[StructureDataset, StructureD
     validate_dataframe_schema(
         df,
         label_config,
-        require_energy=config.w1 > 0.0,
-        require_forces=config.w2 > 0.0,
+        require_energy=True,
+        require_forces=True,
         require_stress=config.w3 > 0.0,
     )
     df_train = df.loc[df["fold"] != config.val_fold].reset_index(drop=True)

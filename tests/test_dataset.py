@@ -7,7 +7,7 @@ from pymatgen.core import Lattice, Structure
 
 from gptff.data import StructureDataset, validate_dataframe_schema
 from gptff.graph import CrystalGraphConverter
-from gptff.utils_.labels import LabelConfig
+from gptff.utils.labels import LabelConfig
 
 
 def test_structure_dataset_converts_stress_with_label_config():

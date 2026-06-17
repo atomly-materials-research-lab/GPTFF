@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from gptff.model import GPTFFNetConfig
-from gptff.utils_.labels import LabelConfig
+from gptff.utils.labels import LabelConfig
 
 
 @dataclass

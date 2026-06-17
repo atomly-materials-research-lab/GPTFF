@@ -8,8 +8,8 @@ from ase.calculators.calculator import Calculator, all_changes
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model.config import GPTFFNetConfig
 from gptff.model.model import GPTFFNet, tModLodaer_t
-from gptff.model.prediction import predict_energy_forces_stress
-from gptff.utils_.labels import stress_gpa_to_ase_voigt
+from gptff.inference import predict_energy_forces_stress
+from gptff.utils.labels import stress_gpa_to_ase_voigt
 
 
 class ASECalculator(Calculator):
@@ -45,6 +45,7 @@ class ASECalculator(Calculator):
             batch,
             unit_trans=self.unit_trans,
             create_graph=False,
+            compute_stress=True,
         )
 
     def calculate(

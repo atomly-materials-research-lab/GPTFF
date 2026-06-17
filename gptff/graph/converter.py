@@ -6,7 +6,7 @@ import numpy as np
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-from gptff.graph.data import CrystalGraph
+from gptff.graph.containers import CrystalGraph
 
 
 @dataclass(frozen=True)

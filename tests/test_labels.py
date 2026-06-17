@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from gptff.utils_.labels import (
+from gptff.utils.labels import (
     EV_PER_ANG3_TO_GPA,
     LabelConfig,
     convert_forces_to_ev_per_ang,

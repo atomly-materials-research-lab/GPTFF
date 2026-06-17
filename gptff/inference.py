@@ -7,25 +7,19 @@ def predict_energy_forces_stress(
     model,
     batch,
     unit_trans=160.21766208,
-    create_graph=True,
+    create_graph=False,
     *,
-    compute_forces=True,
     compute_stress=True,
 ):
     graph = batch.with_geometry(
-        positions_requires_grad=compute_forces,
+        positions_requires_grad=True,
         strain_requires_grad=compute_stress,
     )
     energy = model(graph).squeeze(-1)
 
-    if not compute_forces and not compute_stress:
-        return energy, None, None
+    zero_energy = energy.sum() * 0.0 if energy.requires_grad and create_graph else None
 
-    zero_energy = energy.sum() * 0.0 if energy.requires_grad else None
-
-    grad_inputs = []
-    if compute_forces:
-        grad_inputs.append(graph.positions)
+    grad_inputs = [graph.positions]
     if compute_stress:
         grad_inputs.append(graph.strain)
 
@@ -34,7 +28,7 @@ def predict_energy_forces_stress(
             energy,
             grad_inputs,
             torch.ones_like(energy),
-            retain_graph=True,
+            retain_graph=create_graph,
             create_graph=create_graph,
             allow_unused=True,
         )
@@ -42,13 +36,11 @@ def predict_energy_forces_stress(
         gradients = tuple(None for _ in grad_inputs)
 
     grad_iter = iter(gradients)
-    if compute_forces:
-        forces = -_optional_gradient(next(grad_iter), graph.positions, zero_energy)
-    else:
-        forces = None
+    forces = -_optional_gradient(next(grad_iter), graph.positions, zero_energy)
     if compute_stress:
         stress_grad = _optional_gradient(next(grad_iter), graph.strain, zero_energy)
-        stress = stress_grad / graph.volumes[:, None, None] * unit_trans
+        volumes = graph.volumes if create_graph else graph.volumes.detach()
+        stress = stress_grad / volumes[:, None, None] * unit_trans
     else:
         stress = None
     return energy, forces, stress

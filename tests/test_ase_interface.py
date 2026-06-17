@@ -2,8 +2,9 @@ import numpy as np
 import torch
 from ase import Atoms
 
-from gptff.model import ASECalculator, GPTFFNet, GPTFFNetConfig
-from gptff.utils_.labels import EV_PER_ANG3_TO_GPA
+from gptff.interfaces import ASECalculator
+from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):

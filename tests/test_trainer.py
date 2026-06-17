@@ -233,14 +233,13 @@ def test_load_training_checkpoint_rejects_missing_file(tmp_path):
         )
 
 
-def test_compute_batch_loss_allows_energy_only_batches():
+def test_compute_batch_loss_requires_energy_and_force_batches():
     config = TrainingConfig.from_dict(_raw_config())
-    config.w2 = 0.0
     config.w3 = 0.0
 
     batch_loss = compute_batch_loss(
         _ConstantEnergyModel(),
-        _energy_only_batch(),
+        _energy_force_batch(),
         torch.nn.HuberLoss(),
         config,
         create_graph=False,
@@ -248,18 +247,17 @@ def test_compute_batch_loss_allows_energy_only_batches():
 
     assert torch.isfinite(batch_loss.loss)
     assert batch_loss.energy_mae is not None
-    assert batch_loss.force_mae is None
+    assert batch_loss.force_mae is not None
     assert batch_loss.stress_mae is None
-    assert batch_loss.force_count == 0
+    assert batch_loss.force_count == 3
     assert batch_loss.stress_count == 0
 
 
-def test_compute_batch_loss_requires_active_labels():
+def test_compute_batch_loss_requires_force_labels():
     config = TrainingConfig.from_dict(_raw_config())
-    config.w2 = 0.0
-    config.w3 = 1.0
+    config.w3 = 0.0
 
-    with pytest.raises(ValueError, match="stress labels are required"):
+    with pytest.raises(ValueError, match="force labels are required"):
         compute_batch_loss(
             _ConstantEnergyModel(),
             _energy_only_batch(),
@@ -269,16 +267,40 @@ def test_compute_batch_loss_requires_active_labels():
         )
 
 
-def test_compute_batch_loss_rejects_all_zero_weights():
+def test_compute_batch_loss_requires_positive_energy_and_force_weights():
     config = TrainingConfig.from_dict(_raw_config())
     config.w1 = 0.0
-    config.w2 = 0.0
     config.w3 = 0.0
 
-    with pytest.raises(ValueError, match="At least one loss weight"):
+    with pytest.raises(ValueError, match="weight_energy must be positive"):
         compute_batch_loss(
             _ConstantEnergyModel(),
-            _energy_only_batch(),
+            _energy_force_batch(),
+            torch.nn.HuberLoss(),
+            config,
+            create_graph=False,
+        )
+
+    config.w1 = 1.0
+    config.w2 = 0.0
+    with pytest.raises(ValueError, match="weight_force must be positive"):
+        compute_batch_loss(
+            _ConstantEnergyModel(),
+            _energy_force_batch(),
+            torch.nn.HuberLoss(),
+            config,
+            create_graph=False,
+        )
+
+
+def test_compute_batch_loss_requires_stress_labels_when_enabled():
+    config = TrainingConfig.from_dict(_raw_config())
+    config.w3 = 1.0
+
+    with pytest.raises(ValueError, match="stress labels are required"):
+        compute_batch_loss(
+            _ConstantEnergyModel(),
+            _energy_force_batch(),
             torch.nn.HuberLoss(),
             config,
             create_graph=False,
@@ -298,6 +320,16 @@ def _energy_only_batch():
     structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
     graph = CrystalGraphConverter(r_cut=2.0, a_cut=2.0).convert(structure)
     return CrystalGraphBatch.from_graphs([graph], energies=[-1.0])
+
+
+def _energy_force_batch():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.0, a_cut=2.0).convert(structure)
+    return CrystalGraphBatch.from_graphs(
+        [graph],
+        energies=[-1.0],
+        forces=[np.zeros((1, 3), dtype=np.float32)],
+    )
 
 
 def _training_df():
