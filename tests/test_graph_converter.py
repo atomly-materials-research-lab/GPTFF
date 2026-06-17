@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -67,6 +69,28 @@ def test_batch_offsets_atom_and_triplet_indices():
     assert batch.edge_index[:, 6:].min().item() == 1
     assert batch.triplet_edge_index[:, :30].max().item() < 6
     assert batch.triplet_edge_index[:, 30:].min().item() >= 6
+
+
+def test_converter_and_batch_keep_cutoff_metadata():
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.1, a_cut=1.9).convert(structure)
+    batch = CrystalGraphBatch.from_graphs([graph])
+
+    assert graph.radial_cutoff == pytest.approx(2.1)
+    assert graph.angle_cutoff == pytest.approx(1.9)
+    assert batch.radial_cutoff == pytest.approx(2.1)
+    assert batch.angle_cutoff == pytest.approx(1.9)
+
+
+def test_batch_rejects_mismatched_cutoff_metadata():
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+
+    with pytest.raises(ValueError, match="different radial_cutoff"):
+        CrystalGraphBatch.from_graphs([graph, replace(graph, radial_cutoff=2.2)])
+
+    with pytest.raises(ValueError, match="different angle_cutoff"):
+        CrystalGraphBatch.from_graphs([graph, replace(graph, angle_cutoff=2.2)])
 
 
 def test_batch_samples_collates_labels():

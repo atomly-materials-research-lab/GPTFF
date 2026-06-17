@@ -37,6 +37,8 @@ def _make_disconnected_double_graph(graph: CrystalGraph) -> CrystalGraph:
         atom_types=np.concatenate([graph.atom_types, graph.atom_types], axis=0),
         positions=np.concatenate([graph.positions, graph.positions + displacement], axis=0),
         lattice=graph.lattice.copy(),
+        radial_cutoff=graph.radial_cutoff,
+        angle_cutoff=graph.angle_cutoff,
         edge_index=np.concatenate([graph.edge_index, graph.edge_index + atom_offset], axis=1),
         edge_offsets=np.concatenate([graph.edge_offsets, graph.edge_offsets], axis=0),
         edge_distances=np.concatenate([graph.edge_distances, graph.edge_distances], axis=0),

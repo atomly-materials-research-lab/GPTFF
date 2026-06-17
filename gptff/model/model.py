@@ -318,11 +318,16 @@ class GPTFFNet(nn.Module):
             readout_zero_init=config.readout_zero_init,
         )
 
+    def _validate_graph_cutoffs(self, graph) -> None:
+        _validate_cutoff("radial_cutoff", graph.radial_cutoff, self.radial_cutoff)
+        _validate_cutoff("angle_cutoff", graph.angle_cutoff, self.angle_cutoff)
+
     def forward(self, graph):
         """
         graph: DifferentiableGraphBatch
         """
 
+        self._validate_graph_cutoffs(graph)
         atom_fea = self.atom_embedding(graph.atom_types)
         edge_basis = self.edge_rbf(graph.edge_lengths)
         angle_edge_basis = self.angle_edge_rbf(graph.edge_lengths)
@@ -341,3 +346,12 @@ class GPTFFNet(nn.Module):
 
         atom_fea = self.final_atom_norm(atom_fea)
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
+
+
+def _validate_cutoff(name: str, graph_value: float, model_value: float) -> None:
+    graph_value = float(graph_value)
+    model_value = float(model_value)
+    if abs(graph_value - model_value) > 1e-6:
+        raise ValueError(
+            f"Graph {name} {graph_value} does not match model {name} {model_value}."
+        )

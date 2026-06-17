@@ -136,6 +136,8 @@ def _sample(atom_types, energy):
         atom_types=atom_types,
         positions=np.zeros((len(atom_types), 3), dtype=np.float32),
         lattice=np.eye(3, dtype=np.float32),
+        radial_cutoff=5.0,
+        angle_cutoff=3.5,
         edge_index=np.empty((2, 0), dtype=np.int64),
         edge_offsets=np.empty((0, 3), dtype=np.float32),
         edge_distances=np.empty((0,), dtype=np.float32),

@@ -58,6 +58,8 @@ class CrystalGraphConverter:
             atom_types=np.asarray([site.specie.number for site in structure], dtype=np.int64),
             positions=np.asarray(structure.cart_coords, dtype=np.float32),
             lattice=np.asarray(structure.lattice.matrix, dtype=np.float32),
+            radial_cutoff=float(self.r_cut),
+            angle_cutoff=float(self.a_cut),
             edge_index=edge_index,
             edge_offsets=offsets.astype(np.float32, copy=False),
             edge_distances=distances,

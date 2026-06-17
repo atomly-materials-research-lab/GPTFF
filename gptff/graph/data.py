@@ -12,6 +12,8 @@ class CrystalGraph:
     atom_types: np.ndarray
     positions: np.ndarray
     lattice: np.ndarray
+    radial_cutoff: float
+    angle_cutoff: float
     edge_index: np.ndarray
     edge_offsets: np.ndarray
     edge_distances: np.ndarray
@@ -45,6 +47,8 @@ class CrystalGraphBatch:
     atom_types: torch.Tensor
     positions: torch.Tensor
     lattice: torch.Tensor
+    radial_cutoff: float
+    angle_cutoff: float
     edge_index: torch.Tensor
     edge_offsets: torch.Tensor
     edge_distances: torch.Tensor
@@ -69,6 +73,9 @@ class CrystalGraphBatch:
     ) -> "CrystalGraphBatch":
         if len(graphs) == 0:
             raise ValueError("Cannot batch an empty graph list.")
+
+        radial_cutoff = _shared_cutoff(graphs, "radial_cutoff")
+        angle_cutoff = _shared_cutoff(graphs, "angle_cutoff")
 
         atom_counts = np.asarray([graph.num_atoms for graph in graphs], dtype=np.int64)
         edge_counts = np.asarray([graph.num_edges for graph in graphs], dtype=np.int64)
@@ -99,6 +106,8 @@ class CrystalGraphBatch:
             atom_types=torch.tensor(atom_types, dtype=torch.long),
             positions=torch.tensor(positions, dtype=torch.float32),
             lattice=torch.tensor(lattice, dtype=torch.float32),
+            radial_cutoff=radial_cutoff,
+            angle_cutoff=angle_cutoff,
             edge_index=torch.tensor(edge_index, dtype=torch.long),
             edge_offsets=torch.tensor(graph_edge_offsets, dtype=torch.float32),
             edge_distances=torch.tensor(edge_distances, dtype=torch.float32),
@@ -232,6 +241,18 @@ def _concat_axis1(arrays: Sequence[np.ndarray], rows: int, dtype: np.dtype) -> n
     if not non_empty:
         return np.empty((rows, 0), dtype=dtype)
     return np.concatenate(non_empty, axis=1).astype(dtype, copy=False)
+
+
+def _shared_cutoff(graphs: Sequence[CrystalGraph], field_name: str) -> float:
+    reference = float(getattr(graphs[0], field_name))
+    for graph in graphs[1:]:
+        value = float(getattr(graph, field_name))
+        if not np.isclose(value, reference, rtol=0.0, atol=1e-8):
+            raise ValueError(
+                f"Cannot batch graphs with different {field_name} values: "
+                f"{reference} and {value}."
+            )
+    return reference
 
 
 def _optional_float_tensor(values: Optional[Sequence[float]]) -> Optional[torch.Tensor]:
