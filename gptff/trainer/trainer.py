@@ -25,6 +25,7 @@ from gptff.utils_.data import (
     StructureDataset,
     collate_graph_samples,
 )
+from gptff.utils_.labels import LabelConfig
 
 
 @dataclass
@@ -36,6 +37,10 @@ class TrainingConfig:
     device: str
     data_path: str
     data_file: str
+    energy_unit: str
+    force_unit: str
+    stress_unit: str
+    stress_sign: float
     num_workers: int
     lr: float
     weight_decay: float
@@ -81,6 +86,10 @@ class TrainingConfig:
             device=str(training["device"]),
             data_path=str(data["data_path"]),
             data_file=str(data["data_file"]),
+            energy_unit=str(data.get("energy_unit", "ev")),
+            force_unit=str(data.get("force_unit", "ev_per_ang")),
+            stress_unit=str(data.get("stress_unit", "kbar")),
+            stress_sign=float(data.get("stress_sign", -1.0)),
             num_workers=int(training["workers"]),
             lr=float(training["learning_rate"]),
             weight_decay=float(training["weight_decay"]),
@@ -116,6 +125,14 @@ class TrainingConfig:
 
     def checkpoint_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def to_label_config(self) -> LabelConfig:
+        return LabelConfig(
+            energy_unit=self.energy_unit,
+            force_unit=self.force_unit,
+            stress_unit=self.stress_unit,
+            stress_sign=self.stress_sign,
+        )
 
     def to_model_config(self) -> GPTFFNetConfig:
         return GPTFFNetConfig(
@@ -209,15 +226,18 @@ def build_datasets(config: TrainingConfig) -> Tuple[StructureDataset, StructureD
     df = read_data(config)
     df_train = df.loc[df["fold"] != config.val_fold].reset_index(drop=True)
     df_val = df.loc[df["fold"] == config.val_fold].reset_index(drop=True)
+    label_config = config.to_label_config()
     train_dataset = StructureDataset(
         df_train,
         r_cut=config.radial_cutoff,
         a_cut=config.angle_cutoff,
+        label_config=label_config,
     )
     val_dataset = StructureDataset(
         df_val,
         r_cut=config.radial_cutoff,
         a_cut=config.angle_cutoff,
+        label_config=label_config,
     )
     return train_dataset, val_dataset
 

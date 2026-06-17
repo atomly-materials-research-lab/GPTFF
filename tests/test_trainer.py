@@ -14,12 +14,27 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.lr == 1e-3
     assert config.num_workers == 0
     assert config.num_train_steps == config.epochs
+    assert config.energy_unit == "ev"
+    assert config.force_unit == "ev_per_ang"
+    assert config.stress_unit == "kbar"
+    assert config.stress_sign == pytest.approx(-1.0)
     assert config.element_refs == "atomly"
     assert config.n_readout_layers == 4
     assert config.readout_zero_init is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.residual_scale == pytest.approx(0.5)
     assert config.checkpoint_dict()["data_file"] == "data.csv"
+
+
+def test_training_config_builds_label_config_from_data_fields():
+    config = TrainingConfig.from_dict(_raw_config())
+
+    label_config = config.to_label_config()
+
+    assert label_config.energy_unit == "ev"
+    assert label_config.force_unit == "ev_per_ang"
+    assert label_config.stress_unit == "kbar"
+    assert label_config.stress_sign == pytest.approx(-1.0)
 
 
 def test_training_config_builds_model_config_only_from_model_fields():
@@ -133,5 +148,9 @@ def _raw_config():
         "data": {
             "data_path": ".",
             "data_file": "data.csv",
+            "energy_unit": "ev",
+            "force_unit": "ev_per_ang",
+            "stress_unit": "kbar",
+            "stress_sign": -1.0,
         },
     }

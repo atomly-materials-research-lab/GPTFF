@@ -4,18 +4,31 @@ import ast
 import functools
 import math
 
-import numpy as np
 import torch
 from pymatgen.core.structure import Structure
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import Dataset
 
 from gptff.graph import CrystalGraphConverter, GraphSample, batch_samples
+from gptff.utils_.labels import (
+    LabelConfig,
+    convert_energy_to_ev,
+    convert_forces_to_ev_per_ang,
+    convert_stress_to_gpa,
+)
 
 
 class StructureDataset(Dataset):
-    def __init__(self, df, r_cut=5.0, a_cut=3.5, numerical_tol=1e-8):
+    def __init__(
+        self,
+        df,
+        r_cut=5.0,
+        a_cut=3.5,
+        numerical_tol=1e-8,
+        label_config=None,
+    ):
         self.df = df.reset_index(drop=True)
+        self.label_config = label_config or LabelConfig()
         self.converter = CrystalGraphConverter(
             r_cut=r_cut,
             a_cut=a_cut,
@@ -33,9 +46,19 @@ class StructureDataset(Dataset):
             graph = self.converter.convert(structure)
             return GraphSample(
                 graph=graph,
-                energy=float(row["energy"]),
-                forces=np.asarray(ast.literal_eval(row["forces"]), dtype=np.float32),
-                stress=np.asarray(ast.literal_eval(row["stress"]), dtype=np.float32) * -0.1,
+                energy=convert_energy_to_ev(
+                    row["energy"],
+                    unit=self.label_config.energy_unit,
+                ),
+                forces=convert_forces_to_ev_per_ang(
+                    ast.literal_eval(row["forces"]),
+                    unit=self.label_config.force_unit,
+                ),
+                stress=convert_stress_to_gpa(
+                    ast.literal_eval(row["stress"]),
+                    unit=self.label_config.stress_unit,
+                    sign=self.label_config.stress_sign,
+                ),
             )
         except Exception as exc:
             raise ValueError(f"Failed to load structure row {idx}.") from exc

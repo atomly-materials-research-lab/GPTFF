@@ -36,7 +36,11 @@
     "data":
     {
         "data_path": "data_path",
-        "data_file": "data_prop.csv"
+        "data_file": "data_prop.csv",
+        "energy_unit": "ev",
+        "force_unit": "ev_per_ang",
+        "stress_unit": "kbar",
+        "stress_sign": -1.0
     }
     
 }
