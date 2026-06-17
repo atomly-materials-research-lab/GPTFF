@@ -222,6 +222,7 @@ The file `config.json` includes training settings,
 - readout_zero_init: If true, initialize the learned residual energy output to zero
 - interaction_dropout: Dropout probability inside non-transformer interaction blocks
 - residual_scale: Scale factor applied to interaction residual updates
+- aggregation_norm: Message aggregation normalization. Use `"sqrt"`, `"mean"`, or `"sum"`.
 - device: `cpu` or `cuda`
 - output_dir: Directory for checkpoints and validation history
 - val_fold: Label validation data during training

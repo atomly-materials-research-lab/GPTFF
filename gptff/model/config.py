@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
+from gptff.model.aggregation import validate_aggregation_norm
+
 
 @dataclass(frozen=True)
 class GPTFFNetConfig:
@@ -20,6 +22,7 @@ class GPTFFNetConfig:
     readout_zero_init: bool = True
     interaction_dropout: float = 0.0
     residual_scale: float = 1.0
+    aggregation_norm: str = "sqrt"
 
     def __post_init__(self) -> None:
         if self.node_feature_len <= 0:
@@ -46,6 +49,11 @@ class GPTFFNetConfig:
             raise ValueError("interaction_dropout must be in the range [0, 1).")
         if self.residual_scale < 0:
             raise ValueError("residual_scale must be non-negative.")
+        object.__setattr__(
+            self,
+            "aggregation_norm",
+            validate_aggregation_norm(self.aggregation_norm),
+        )
 
     @classmethod
     def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFNetConfig":
@@ -64,6 +72,7 @@ class GPTFFNetConfig:
             readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
             residual_scale=float(raw_config.get("residual_scale", 1.0)),
+            aggregation_norm=str(raw_config.get("aggregation_norm", "sqrt")),
         )
 
     def to_dict(self) -> dict[str, Any]:

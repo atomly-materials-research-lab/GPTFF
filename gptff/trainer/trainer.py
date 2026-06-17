@@ -66,6 +66,7 @@ class TrainingConfig:
     readout_zero_init: bool = True
     interaction_dropout: float = 0.0
     residual_scale: float = 1.0
+    aggregation_norm: str = "sqrt"
     unit_trans: float = 160.21766208
     output_dir: str = "."
     min_lr: float = 5e-6
@@ -116,6 +117,7 @@ class TrainingConfig:
             readout_zero_init=bool(training.get("readout_zero_init", True)),
             interaction_dropout=float(training.get("interaction_dropout", 0.0)),
             residual_scale=float(training.get("residual_scale", 1.0)),
+            aggregation_norm=str(training.get("aggregation_norm", "sqrt")),
             unit_trans=float(training.get("unit_trans", 160.21766208)),
             output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
             min_lr=float(training.get("min_lr", 5e-6)),
@@ -152,6 +154,7 @@ class TrainingConfig:
             readout_zero_init=self.readout_zero_init,
             interaction_dropout=self.interaction_dropout,
             residual_scale=self.residual_scale,
+            aggregation_norm=self.aggregation_norm,
         )
 
 

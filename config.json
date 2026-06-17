@@ -21,6 +21,7 @@
         "readout_zero_init": true,
         "interaction_dropout": 0.0,
         "residual_scale": 1.0,
+        "aggregation_norm": "sqrt",
         "warmup_steps": 0,
         "device": "cuda",
         "output_dir": ".",
