@@ -181,7 +181,7 @@ dataset = AtomicDataset.from_file("dataset.json.gz")
 For command-line training, set `data.dataset_path` to the serialized dataset:
 
 ```bash
-gptff_trainer config.yaml
+gptff train config.yaml
 ```
 
 Elemental reference energies are configured through the top-level `element_references` section, not stored as a dataset column. Set `source: atomly` to use the built-in Atomly reference preset, provide your own mapping/list as `source`, set `source: fit` to fit references from the training split, set `source: null` to disable references, or point `source` to a YAML/JSON reference file.

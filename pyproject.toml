@@ -25,7 +25,7 @@ wandb = ["wandb>=0.27.2"]
 find = { include = ["gptff*"], exclude = ["test*"] }
 
 [project.scripts]
-gptff_trainer = "gptff.trainer.trainer:main"
+gptff = "gptff.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/atomly-materials-research-lab/GPTFF"

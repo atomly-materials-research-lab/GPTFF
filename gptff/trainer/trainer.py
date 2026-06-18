@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import argparse
 import gc
 import math
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +19,7 @@ from gptff.data import (
 )
 from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
-from gptff.trainer.config import TrainingConfig, load_config
+from gptff.trainer.config import TrainingConfig
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
@@ -90,12 +88,6 @@ def select_validation_metric(metrics: EpochMetrics) -> float:
         if meter.count > 0:
             return meter.avg
     return float("inf")
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a GPTFF model.")
-    parser.add_argument("config", metavar="CONFIG", help="YAML training configuration")
-    return parser.parse_args(argv)
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
@@ -380,13 +372,3 @@ def run_training(
     dataset: AtomicDataset | None = None,
 ) -> float:
     return Trainer(config).fit(dataset)
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    args = parse_args(argv)
-    config = load_config(args.config)
-    run_training(config)
-
-
-if __name__ == "__main__":
-    main()

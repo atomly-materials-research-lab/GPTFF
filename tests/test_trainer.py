@@ -14,6 +14,7 @@ from gptff.data import (
 )
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
+from gptff.trainer.config import load_config
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
@@ -27,7 +28,6 @@ from gptff.trainer.trainer import (
     TrainingConfig,
     compute_batch_loss,
     has_nonfinite_loss,
-    load_config,
     save_checkpoint,
     use_cuda_amp,
 )
