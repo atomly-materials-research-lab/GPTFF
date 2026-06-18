@@ -41,6 +41,46 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
     assert torch.isfinite(stress).all()
 
 
+def test_model_forward_and_efs_with_atom_attention():
+    cfg = GPTFFConfig(
+        atom_feature_dim=8,
+        edge_feature_dim=8,
+        num_interaction_blocks=1,
+        num_radial=8,
+        num_angular=4,
+        radial_cutoff=3.0,
+        angle_cutoff=3.0,
+        cutoff_coeff=5,
+        atom_attention={
+            "enabled": True,
+            "num_heads": 2,
+            "dropout": 0.0,
+            "use_ffn": True,
+        },
+    )
+    structure = Structure(
+        Lattice.cubic(3.0),
+        ["Na", "Cl"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    )
+    graph = CrystalGraphConverter(radial_cutoff=3.0, angle_cutoff=3.0).convert(structure)
+    batch = CrystalGraphBatch.from_graphs([graph])
+
+    energy, forces, stress = predict_energy_forces_stress(
+        GPTFF(cfg),
+        batch,
+        create_graph=True,
+        compute_stress=True,
+    )
+
+    assert energy.shape == (1,)
+    assert forces.shape == (2, 3)
+    assert stress.shape == (1, 3, 3)
+    assert torch.isfinite(energy).all()
+    assert torch.isfinite(forces).all()
+    assert torch.isfinite(stress).all()
+
+
 def test_model_rejects_radial_cutoff_mismatch():
     cfg = GPTFFConfig(
         atom_feature_dim=8,

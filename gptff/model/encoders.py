@@ -36,6 +36,7 @@ class EdgeModulation:
 @dataclass(frozen=True)
 class GeometryFeatures:
     edge_basis: torch.Tensor
+    edge_cutoff: torch.Tensor
     angle_radial_basis: torch.Tensor
     edge_features: torch.Tensor
     edge_modulation: EdgeModulation
@@ -97,8 +98,10 @@ class GeometryEmbedding(nn.Module):
     def forward(self, graph):
         edge_basis = self.edge_rbf(graph.edge_lengths)
         angle_radial_basis = self.angle_edge_rbf(graph.edge_lengths)
+        edge_cutoff = self.edge_rbf.cutoff_fn(graph.edge_lengths.reshape(-1, 1))
         return GeometryFeatures(
             edge_basis=edge_basis,
+            edge_cutoff=edge_cutoff,
             angle_radial_basis=angle_radial_basis,
             edge_features=self.edge_embedding(edge_basis),
             edge_modulation=self.edge_modulation(edge_basis),

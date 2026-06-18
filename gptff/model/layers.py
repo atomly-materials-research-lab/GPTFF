@@ -229,18 +229,165 @@ class AtomFeatureDelta(nn.Module):
         )
 
 
+def cutoff_weighted_softmax(
+    logits: torch.Tensor,
+    indices: torch.Tensor,
+    dim_size: int,
+    edge_cutoff: torch.Tensor,
+    *,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    if logits.numel() == 0:
+        return logits
+
+    if logits.ndim != 2:
+        raise ValueError("logits must have shape [num_edges, num_heads].")
+
+    edge_cutoff = edge_cutoff.reshape(-1, 1).to(dtype=logits.dtype, device=logits.device)
+    if edge_cutoff.shape[0] != logits.shape[0]:
+        raise ValueError("edge_cutoff must have one value per edge.")
+
+    expanded_indices = indices.reshape(-1, 1).expand(-1, logits.shape[1])
+    with torch.no_grad():
+        max_logits = logits.new_full((dim_size, logits.shape[1]), -torch.inf)
+        max_logits.scatter_reduce_(
+            0,
+            expanded_indices,
+            logits,
+            reduce="amax",
+            include_self=True,
+        )
+
+    weights = edge_cutoff * torch.exp(logits - max_logits[indices])
+    normalizer = logits.new_zeros((dim_size, logits.shape[1]))
+    normalizer.index_add_(0, indices, weights)
+    return weights / normalizer[indices].clamp_min(eps)
+
+
+class InvariantAtomAttention(nn.Module):
+    def __init__(
+        self,
+        atom_feature_dim,
+        edge_feature_dim,
+        num_radial,
+        *,
+        num_heads=4,
+        dropout=0.0,
+    ):
+        super().__init__()
+        if atom_feature_dim % num_heads != 0:
+            raise ValueError("atom_feature_dim must be divisible by atom attention num_heads.")
+
+        self.atom_feature_dim = int(atom_feature_dim)
+        self.edge_feature_dim = int(edge_feature_dim)
+        self.num_heads = int(num_heads)
+        self.head_dim = self.atom_feature_dim // self.num_heads
+        input_dim = 2 * atom_feature_dim + edge_feature_dim + num_radial
+
+        self.score = MLP(
+            input_dim,
+            self.num_heads,
+            hidden_dims=atom_feature_dim,
+            dropout=dropout,
+        )
+        self.value = MLP(
+            input_dim,
+            atom_feature_dim,
+            hidden_dims=atom_feature_dim,
+            dropout=dropout,
+            activate_output=True,
+        )
+        self.output = nn.Linear(atom_feature_dim, atom_feature_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        atom_features,
+        edge_features,
+        graph,
+        edge_basis,
+        edge_cutoff,
+        edge_modulation,
+    ):
+        if graph.edge_index.numel() == 0:
+            return torch.zeros_like(atom_features)
+
+        center_indices = graph.edge_index[0]
+        neighbor_indices = graph.edge_index[1]
+        pair_features = torch.cat([
+            atom_features[center_indices],
+            atom_features[neighbor_indices],
+            edge_features,
+            edge_basis,
+        ], dim=-1)
+
+        logits = self.score(pair_features)
+        attention = cutoff_weighted_softmax(
+            logits,
+            center_indices,
+            dim_size=atom_features.shape[0],
+            edge_cutoff=edge_cutoff,
+        )
+        values = self.value(pair_features) * edge_modulation
+        values = values.reshape(-1, self.num_heads, self.head_dim)
+        messages = values * attention.unsqueeze(-1)
+        aggregated = sum_aggregation(
+            messages.reshape(messages.shape[0], self.atom_feature_dim),
+            center_indices,
+            dim_size=atom_features.shape[0],
+            reference=atom_features,
+        )
+        return self.dropout(self.output(aggregated))
+
+
+class AtomFeedForward(nn.Module):
+    def __init__(
+        self,
+        atom_feature_dim,
+        hidden_dim=None,
+        *,
+        dropout=0.0,
+    ):
+        super().__init__()
+        hidden_dim = int(hidden_dim or 2 * atom_feature_dim)
+        self.ffn = MLP(
+            atom_feature_dim,
+            atom_feature_dim,
+            hidden_dims=hidden_dim,
+            dropout=dropout,
+        )
+
+    def forward(self, atom_features):
+        return self.ffn(atom_features)
+
+
+def _attention_config_value(config, key, default):
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return getattr(config, key, default)
+
+
 class InteractionBlock(nn.Module):
     def __init__(
         self,
         atom_feature_dim,
         edge_feature_dim,
         num_angular,
+        num_radial,
         *,
         dropout=0.0,
+        atom_attention_config=None,
     ):
         super().__init__()
 
         self.residual_dropout = nn.Dropout(dropout)
+        attention_enabled = bool(_attention_config_value(
+            atom_attention_config,
+            "enabled",
+            False,
+        ))
         self.three_body = ThreeBodyEdgeDelta(
             atom_feature_dim=atom_feature_dim,
             edge_feature_dim=edge_feature_dim,
@@ -260,6 +407,46 @@ class InteractionBlock(nn.Module):
         self.pair_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.triplet_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.atom_norm = nn.LayerNorm(atom_feature_dim)
+        self.atom_attention = None
+        self.attention_norm = None
+        self.attention_ffn = None
+        self.attention_ffn_norm = None
+        if attention_enabled:
+            attention_dropout = float(_attention_config_value(
+                atom_attention_config,
+                "dropout",
+                0.0,
+            ))
+            attention_num_heads = int(_attention_config_value(
+                atom_attention_config,
+                "num_heads",
+                4,
+            ))
+            use_ffn = bool(_attention_config_value(
+                atom_attention_config,
+                "use_ffn",
+                True,
+            ))
+            ffn_hidden_dim = _attention_config_value(
+                atom_attention_config,
+                "ffn_hidden_dim",
+                None,
+            )
+            self.atom_attention = InvariantAtomAttention(
+                atom_feature_dim=atom_feature_dim,
+                edge_feature_dim=edge_feature_dim,
+                num_radial=num_radial,
+                num_heads=attention_num_heads,
+                dropout=attention_dropout,
+            )
+            self.attention_norm = nn.LayerNorm(atom_feature_dim)
+            if use_ffn:
+                self.attention_ffn = AtomFeedForward(
+                    atom_feature_dim,
+                    hidden_dim=ffn_hidden_dim,
+                    dropout=attention_dropout,
+                )
+                self.attention_ffn_norm = nn.LayerNorm(atom_feature_dim)
 
     def forward(self, atom_features, edge_features, graph, geometry_features):
         triplet_delta = self.three_body(
@@ -285,4 +472,19 @@ class InteractionBlock(nn.Module):
             graph,
         )
         atom_features = atom_features + self.residual_dropout(atom_delta)
+
+        if self.atom_attention is not None:
+            attention_delta = self.atom_attention(
+                self.attention_norm(atom_features),
+                edge_features,
+                graph,
+                geometry_features.edge_basis,
+                geometry_features.edge_cutoff,
+                geometry_features.edge_modulation.atom_message,
+            )
+            atom_features = atom_features + attention_delta
+            if self.attention_ffn is not None:
+                atom_features = atom_features + self.attention_ffn(
+                    self.attention_ffn_norm(atom_features)
+                )
         return atom_features, edge_features

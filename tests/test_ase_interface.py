@@ -26,9 +26,7 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
             "state_dict": model.state_dict(),
             "best_validation_metric": 0.0,
             "optimizer": {},
-            "training_config": {
-                "transformer_activate": False,
-            },
+            "training_config": {},
             "model_name": "GPTFF",
             "model_config": cfg.to_dict(),
         },

@@ -53,6 +53,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.num_readout_layers == 4
     assert config.readout_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
+    assert config.model.atom_attention.enabled is False
     assert config.amp is False
     assert config.seed == 42
     assert config.deterministic is True
@@ -231,6 +232,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.num_readout_layers == 4
     assert model_config.readout_atom_norm is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
+    assert model_config.atom_attention.enabled is False
     assert model_config.element_refs == "atomly"
     assert "batch_size" not in model_config.to_dict()
     assert "device" not in model_config.to_dict()
@@ -347,6 +349,7 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_config"]["readout_atom_norm"] is True
     assert "final_atom_norm" not in state["model_config"]
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
+    assert state["model_config"]["atom_attention"]["enabled"] is False
     assert "readout_zero_init" not in state["model_config"]
     assert "residual_zero_init" not in state["model_config"]
     assert "cfg" not in state
@@ -544,7 +547,6 @@ def _raw_config():
             "amp": False,
             "num_interaction_blocks": 1,
             "device": "cpu",
-            "transformer_activate": False,
             "energy_loss_weight": 1.0,
             "force_loss_weight": 1.0,
             "stress_loss_weight": 1.0,
@@ -583,6 +585,13 @@ def _canonical_config():
             "num_readout_layers": training["num_readout_layers"],
             "readout_atom_norm": training["readout_atom_norm"],
             "interaction_dropout": training["interaction_dropout"],
+            "atom_attention": {
+                "enabled": False,
+                "num_heads": 4,
+                "dropout": 0.0,
+                "use_ffn": True,
+                "ffn_hidden_dim": None,
+            },
         },
         "optimizer": {
             "name": "Adam",
@@ -600,7 +609,6 @@ def _canonical_config():
             "device": training["device"],
             "amp": training["amp"],
             "output_dir": training.get("output_dir", "."),
-            "transformer_activate": training["transformer_activate"],
         },
         "loss": {
             "energy_loss_weight": training["energy_loss_weight"],

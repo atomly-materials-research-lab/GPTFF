@@ -49,7 +49,6 @@ class TrainingLoopConfig:
     device: str
     amp: bool = False
     output_dir: str = "."
-    transformer_activate: bool = False
     grad_clip_norm: float = 10.0
     seed: int = 42
     deterministic: bool = True
@@ -161,7 +160,6 @@ class TrainingConfig:
                 device=str(training["device"]),
                 amp=bool(training.get("amp", False)),
                 output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
-                transformer_activate=bool(training.get("transformer_activate", False)),
                 grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
                 seed=int(training.get("seed", 42)),
                 deterministic=bool(training.get("deterministic", True)),
@@ -266,10 +264,6 @@ class TrainingConfig:
     @property
     def output_dir(self) -> str:
         return self.training.output_dir
-
-    @property
-    def transformer_activate(self) -> bool:
-        return self.training.transformer_activate
 
     @property
     def grad_clip_norm(self) -> float:

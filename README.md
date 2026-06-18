@@ -250,7 +250,8 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `cutoff_coeff`: Polynomial cutoff envelope exponent
 - `num_readout_layers`: Number of linear layers in the atom-wise energy readout
 - `readout_atom_norm`: If true, apply LayerNorm to atom features before the energy readout
-- `interaction_dropout`: Dropout probability inside non-transformer interaction blocks
+- `interaction_dropout`: Dropout probability inside interaction blocks
+- `atom_attention`: Optional cutoff-aware invariant atom attention mixer. It is disabled by default. When enabled, `num_heads`, `dropout`, `use_ffn`, and `ffn_hidden_dim` control the residual attention branch after atom update.
 
 `element_references`:
 - `source`: Elemental reference energy source. Use `"atomly"`, `"fit"`, `null`, a mapping, a list, or a YAML/JSON file path. Mapping keys must be atomic numbers.
@@ -272,7 +273,6 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `output_dir`: Directory for checkpoints and `history.csv`
 - `seed`: Random seed shared by Python, NumPy, PyTorch, CUDA, and DataLoader shuffling
 - `deterministic`: If true, require deterministic PyTorch algorithms and disable cuDNN benchmarking
-- `transformer_activate`: If activate the legacy transformer path or not
 
 Model checkpoints are written at epoch boundaries.
 

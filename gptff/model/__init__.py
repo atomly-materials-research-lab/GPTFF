@@ -1,4 +1,4 @@
 from gptff.model.config import GPTFFConfig
-from gptff.model.model import GPTFF, tModLodaer_t
+from gptff.model.model import GPTFF
 
-__all__ = ["GPTFF", "GPTFFConfig", "tModLodaer_t"]
+__all__ = ["GPTFF", "GPTFFConfig"]

@@ -22,7 +22,7 @@ def save_checkpoint(
         "state_dict": model.state_dict(),
         "best_validation_metric": float(best_validation_metric),
         "training_config": config.checkpoint_dict(),
-        "model_name": "tModLodaer_t" if config.transformer_activate else "GPTFF",
+        "model_name": "GPTFF",
         "model_config": config.to_model_config().to_dict(),
     }
     current_path = output_dir / "last.pt"

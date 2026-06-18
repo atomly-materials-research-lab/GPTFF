@@ -11,6 +11,12 @@ model:
   num_readout_layers: 3
   readout_atom_norm: true
   interaction_dropout: 0.0
+  atom_attention:
+    enabled: false
+    num_heads: 4
+    dropout: 0.0
+    use_ffn: true
+    ffn_hidden_dim: null
 
 element_references:
   source: atomly
@@ -31,7 +37,6 @@ training:
   device: cuda
   amp: false
   output_dir: .
-  transformer_activate: false
   grad_clip_norm: 10.0
   seed: 42
   deterministic: true

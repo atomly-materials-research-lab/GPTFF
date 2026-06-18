@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "gptff"
 version = "1.0.1"
 description = "Graph-based Pretrained Transformer Force Field."
-authors = [{ name = "Fankai Xie", email = "fankaixiee@gmail.com" }]
+authors = [
+    {name = "Fankai Xie", email = "fankaixiee@gmail.com"},
+    {name = "Tenglong Lu", email = "lutenglongg@gmail.com"}
+]
 requires-python = ">=3.8"
 
 dependencies = [

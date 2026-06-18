@@ -103,7 +103,7 @@ def test_triplet_modulation_uses_angle_cutoff_independently():
     assert torch.equal(triplet_modulation, torch.zeros_like(triplet_modulation))
 
 
-def test_non_transformer_model_uses_embedding_modules():
+def test_default_model_uses_embedding_modules():
     cfg = GPTFFConfig(
         atom_feature_dim=8,
         edge_feature_dim=8,
@@ -134,7 +134,7 @@ def test_non_transformer_model_uses_embedding_modules():
     assert not hasattr(model, "w_r")
 
 
-def test_non_transformer_model_can_disable_readout_atom_norm():
+def test_default_model_can_disable_readout_atom_norm():
     cfg = GPTFFConfig(
         atom_feature_dim=8,
         edge_feature_dim=8,

@@ -21,7 +21,7 @@ from gptff.data import (
     build_loaders,
     load_atomic_dataset,
 )
-from gptff.model import GPTFF, tModLodaer_t
+from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import TrainingConfig, load_config
 from gptff.trainer.loss import (
@@ -109,13 +109,13 @@ def select_validation_metric(metrics: EpochMetrics) -> float:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Graph-based Pretrained Transformer Force Field.")
+    parser = argparse.ArgumentParser(description="Train a GPTFF model.")
     parser.add_argument("config", metavar="CONFIG", help="YAML training configuration")
     return parser.parse_args(argv)
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
-    model = tModLodaer_t(config) if config.transformer_activate else GPTFF(config.to_model_config())
+    model = GPTFF(config.to_model_config())
     return model.to(config.device)
 
 

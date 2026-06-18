@@ -5,7 +5,12 @@ from pymatgen.core import Lattice, Structure
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFF, GPTFFConfig
 from gptff.model.encoders import EdgeModulation, GeometryFeatures
-from gptff.model.layers import InteractionBlock, sum_aggregation
+from gptff.model.layers import (
+    InteractionBlock,
+    InvariantAtomAttention,
+    cutoff_weighted_softmax,
+    sum_aggregation,
+)
 
 
 def _cfg(num_interaction_blocks=1, **kwargs):
@@ -37,7 +42,7 @@ def _features(model, graph):
     return model.geometry_embedding(graph)
 
 
-def test_non_transformer_model_uses_interaction_blocks():
+def test_default_model_uses_interaction_blocks():
     model = GPTFF(_cfg(num_interaction_blocks=2))
 
     assert len(model.interactions) == 2
@@ -129,6 +134,75 @@ def test_sum_aggregation_adds_values_by_index():
     )
 
 
+def test_cutoff_weighted_softmax_removes_zero_cutoff_edges():
+    logits = torch.tensor([[0.0, 1.0], [2.0, 0.0], [1.0, 1.0]])
+    indices = torch.tensor([0, 0, 1])
+    edge_cutoff = torch.tensor([[1.0], [0.0], [1.0]])
+
+    attention = cutoff_weighted_softmax(
+        logits,
+        indices,
+        dim_size=2,
+        edge_cutoff=edge_cutoff,
+    )
+
+    assert torch.allclose(attention[0], torch.ones(2))
+    assert torch.equal(attention[1], torch.zeros(2))
+    assert torch.allclose(attention[2], torch.ones(2))
+
+
+def test_invariant_atom_attention_returns_zero_with_zero_cutoff():
+    graph = _batch()
+    model = GPTFF(_cfg())
+    features = _features(model, graph)
+    atom_fea = model.atom_embedding(graph.atom_types)
+    attention = InvariantAtomAttention(
+        atom_feature_dim=model.atom_feature_dim,
+        edge_feature_dim=model.edge_feature_dim,
+        num_radial=model.num_radial,
+        num_heads=2,
+    )
+
+    delta = attention(
+        atom_fea,
+        features.edge_features,
+        graph,
+        features.edge_basis,
+        torch.zeros_like(features.edge_cutoff),
+        features.edge_modulation.atom_message,
+    )
+
+    assert torch.equal(delta, torch.zeros_like(atom_fea))
+
+
+def test_interaction_block_can_enable_atom_attention():
+    graph = _batch()
+    cfg = _cfg(
+        atom_attention={
+            "enabled": True,
+            "num_heads": 2,
+            "dropout": 0.0,
+            "use_ffn": True,
+        },
+    )
+    model = GPTFF(cfg)
+
+    atom_fea = model.atom_embedding(graph.atom_types)
+    features = _features(model, graph)
+    atom_out, edge_out = model.interactions[0](
+        atom_fea,
+        features.edge_features,
+        graph,
+        features,
+    )
+
+    assert isinstance(model.interactions[0].atom_attention, InvariantAtomAttention)
+    assert atom_out.shape == atom_fea.shape
+    assert edge_out.shape == features.edge_features.shape
+    assert torch.isfinite(atom_out).all()
+    assert torch.isfinite(edge_out).all()
+
+
 def test_interaction_block_uses_unscaled_residual_addition():
     graph = _batch()
     model = GPTFF(_cfg())
@@ -144,6 +218,7 @@ def test_interaction_block_uses_unscaled_residual_addition():
     edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
+        edge_cutoff=torch.ones((edge_ij.shape[0], 1)),
         angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_features=edge_ij,
         edge_modulation=EdgeModulation(
@@ -327,6 +402,7 @@ def test_interaction_block_updates_triplet_then_pair_then_atom():
     triplet_modulation = torch.zeros_like(edge_ij)
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
+        edge_cutoff=torch.ones((edge_ij.shape[0], 1)),
         angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_features=edge_ij,
         edge_modulation=edge_modulation,
