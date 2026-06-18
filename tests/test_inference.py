@@ -119,8 +119,37 @@ def test_inference_does_not_retain_autograd_graph_by_default(monkeypatch):
     assert captured_kwargs["retain_graph"] is False
 
 
-def test_stress_matches_strain_finite_difference():
-    graph = _two_atom_graph()
+def test_left_handed_lattice_has_positive_physical_volume():
+    graph = _two_atom_graph(left_handed=True)
+    batch = CrystalGraphBatch.from_graphs([graph])
+
+    differentiable_graph = batch.with_geometry(
+        positions_requires_grad=False,
+        strain_requires_grad=False,
+    )
+
+    assert np.linalg.det(graph.lattice) < 0
+    assert differentiable_graph.volumes.item() == pytest.approx(abs(np.linalg.det(graph.lattice)))
+
+
+def test_equivalent_lattice_handedness_preserves_energy_and_normal_stress():
+    model = EdgeLengthEnergyModel()
+    right_batch = CrystalGraphBatch.from_graphs([_two_atom_graph()])
+    left_batch = CrystalGraphBatch.from_graphs([_two_atom_graph(left_handed=True)])
+
+    right_energy, _, right_stress = predict_energy_forces_stress(model, right_batch)
+    left_energy, _, left_stress = predict_energy_forces_stress(model, left_batch)
+
+    assert torch.allclose(right_energy, left_energy)
+    assert torch.allclose(
+        torch.diagonal(right_stress, dim1=-2, dim2=-1),
+        torch.diagonal(left_stress, dim1=-2, dim2=-1),
+    )
+
+
+@pytest.mark.parametrize("left_handed", [False, True])
+def test_stress_matches_strain_finite_difference(left_handed):
+    graph = _two_atom_graph(left_handed=left_handed)
     batch = CrystalGraphBatch.from_graphs([graph])
     model = EdgeLengthEnergyModel()
 
@@ -134,7 +163,7 @@ def test_stress_matches_strain_finite_difference():
     strain_i = 0
     strain_j = 0
     step = 1e-3
-    volume = np.linalg.det(graph.lattice)
+    volume = abs(np.linalg.det(graph.lattice))
     finite_diff_stress = (
         (
             _energy_with_strain_delta(model, graph, strain_i, strain_j, step)
@@ -162,12 +191,12 @@ class EdgeLengthEnergyModel(torch.nn.Module):
         return torch.index_add(energy, 0, graph.edge_batch, edge_energy)
 
 
-def _two_atom_graph():
+def _two_atom_graph(*, left_handed=False):
+    x_length = -10.0 if left_handed else 10.0
     structure = Structure(
-        Lattice.cubic(10.0),
+        Lattice(np.diag([x_length, 10.0, 10.0])),
         ["Na", "Cl"],
-        [[0.0, 0.0, 0.0], [1.2, 0.3, 0.0]],
-        coords_are_cartesian=True,
+        [[0.0, 0.0, 0.0], [0.12, 0.03, 0.0]],
     )
     return CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0).convert(structure)
 

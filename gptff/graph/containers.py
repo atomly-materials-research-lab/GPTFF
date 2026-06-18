@@ -144,7 +144,7 @@ class CrystalGraphBatch:
         eye = torch.eye(3, dtype=self.lattice.dtype, device=self.lattice.device)
 
         strained_lattice = self.lattice @ (eye.unsqueeze(0) + strain)
-        volumes = torch.linalg.det(strained_lattice)
+        volumes = torch.abs(torch.linalg.det(strained_lattice))
 
         atom_strain = strain[self.atom_batch]
         strained_positions = torch.matmul(
