@@ -19,7 +19,7 @@ dist/
 curr_checkpoint.pth
 best_checkpoint.pth
 learn/
-GPTFF_architecture_math.md
+architecture.md
 
 *.sh
 main.py
