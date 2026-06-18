@@ -99,6 +99,55 @@ class ElementReferenceConfig:
         return self.source
 
 
+@dataclass(frozen=True)
+class WandBConfig:
+    enabled: bool = True
+    project: str = "gptff"
+    entity: str | None = None
+    name: str | None = None
+    group: str | None = None
+    tags: tuple[str, ...] = ()
+    notes: str | None = None
+    mode: str | None = "online"
+    job_type: str | None = "train"
+    init_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, raw_config: Any) -> WandBConfig:
+        if raw_config is None:
+            return cls()
+        if isinstance(raw_config, bool):
+            return cls(enabled=raw_config)
+        if not isinstance(raw_config, Mapping):
+            raise TypeError("logging.wandb must be a mapping, boolean, or null.")
+
+        return cls(
+            enabled=bool(raw_config.get("enabled", True)),
+            project=str(raw_config.get("project", "gptff")),
+            entity=_optional_str(raw_config.get("entity")),
+            name=_optional_str(raw_config.get("name")),
+            group=_optional_str(raw_config.get("group")),
+            tags=_tuple_of_str(raw_config.get("tags", ())),
+            notes=_optional_str(raw_config.get("notes")),
+            mode=_optional_str(raw_config.get("mode", "online")),
+            job_type=_optional_str(raw_config.get("job_type", "train")),
+            init_kwargs=dict(raw_config.get("init_kwargs", {})),
+        )
+
+
+@dataclass(frozen=True)
+class LoggingConfig:
+    wandb: WandBConfig = field(default_factory=WandBConfig)
+
+    @classmethod
+    def from_dict(cls, raw_config: Any) -> LoggingConfig:
+        if raw_config is None:
+            return cls()
+        if not isinstance(raw_config, Mapping):
+            raise TypeError("logging must be a mapping or null.")
+        return cls(wandb=WandBConfig.from_dict(raw_config.get("wandb", None)))
+
+
 @dataclass
 class TrainingConfig:
     data: DataConfig
@@ -107,6 +156,7 @@ class TrainingConfig:
     training: TrainingLoopConfig
     loss: LossConfig
     element_references: ElementReferenceConfig = field(default_factory=ElementReferenceConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @classmethod
     def from_dict(
@@ -129,6 +179,7 @@ class TrainingConfig:
             raw_config.get("element_references", None),
             base_dir=config_base_dir,
         )
+        logging = LoggingConfig.from_dict(raw_config.get("logging", None))
         model_config = replace(
             GPTFFConfig.from_dict(model),
             element_refs=element_references.model_element_refs(),
@@ -173,6 +224,7 @@ class TrainingConfig:
                 ),
             ),
             element_references=element_references,
+            logging=logging,
         )
 
     def checkpoint_dict(self) -> dict[str, Any]:
@@ -183,6 +235,7 @@ class TrainingConfig:
             "training": asdict(self.training),
             "loss": asdict(self.loss),
             "element_references": asdict(self.element_references),
+            "logging": asdict(self.logging),
         }
 
     def to_model_config(self) -> GPTFFConfig:
@@ -459,6 +512,14 @@ def _optional_str(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _tuple_of_str(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
 
 
 def _scheduler_params(optimizer: Mapping[str, Any], epochs: int) -> dict[str, Any]:

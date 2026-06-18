@@ -3,10 +3,10 @@ from __future__ import annotations
 import csv
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol, TextIO
+from typing import Any, Protocol, TextIO
 
 HISTORY_FIELDS = (
     "epoch",
@@ -85,6 +85,55 @@ class ConsoleLogger:
 
     def close(self) -> None:
         return None
+
+
+class WandBLogger:
+    def __init__(self, config, run_config: Mapping[str, Any]) -> None:
+        self._wandb = None
+        self._run = None
+        if not config.enabled:
+            return
+
+        try:
+            import wandb
+        except ImportError:
+            print(
+                "WandB logging is enabled but the 'wandb' package is not installed; "
+                "continuing without wandb.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+
+        init_kwargs = dict(config.init_kwargs)
+        init_kwargs.setdefault("project", config.project)
+        init_kwargs.setdefault("config", dict(run_config))
+        for key in ("entity", "name", "group", "notes", "mode", "job_type"):
+            value = getattr(config, key)
+            if value is not None:
+                init_kwargs.setdefault(key, value)
+        if config.tags:
+            init_kwargs.setdefault("tags", list(config.tags))
+
+        try:
+            self._run = wandb.init(**init_kwargs)
+        except Exception as exc:  # pragma: no cover - depends on user wandb setup.
+            print(
+                f"WandB logging could not be initialized ({exc}); continuing without wandb.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        self._wandb = wandb
+
+    def log_epoch(self, record: EpochLogRecord) -> None:
+        if self._wandb is None:
+            return
+        self._wandb.log(record.as_dict(), step=record.epoch)
+
+    def close(self) -> None:
+        if self._run is not None:
+            self._run.finish()
 
 
 class CompositeLogger:

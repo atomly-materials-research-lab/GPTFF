@@ -19,6 +19,7 @@ from gptff.trainer.logger import (
     ConsoleLogger,
     CSVLogger,
     EpochLogRecord,
+    WandBLogger,
 )
 from gptff.trainer.loss import BatchLoss
 from gptff.trainer.trainer import (
@@ -57,10 +58,13 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.amp is False
     assert config.seed == 42
     assert config.deterministic is True
+    assert config.logging.wandb.enabled is True
+    assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
     assert checkpoint_config["model"]["element_refs"] == "atomly"
     assert checkpoint_config["element_references"]["source"] == "atomly"
+    assert checkpoint_config["logging"]["wandb"]["enabled"] is True
     assert checkpoint_config["optimizer"]["learning_rate"] == pytest.approx(1e-3)
     assert checkpoint_config["training"]["batch_size"] == 4
     assert checkpoint_config["loss"]["force_loss_weight"] == pytest.approx(1.0)
@@ -153,6 +157,7 @@ def test_training_config_parses_canonical_sections_without_legacy_keys():
         "training",
         "loss",
         "element_references",
+        "logging",
     }
 
 
@@ -163,6 +168,37 @@ def test_training_config_defaults_num_workers_to_four():
     config = TrainingConfig.from_dict(raw_config)
 
     assert config.training.num_workers == 4
+
+
+def test_training_config_parses_wandb_logging_config():
+    raw_config = _canonical_config()
+    raw_config["logging"] = {
+        "wandb": {
+            "enabled": False,
+            "project": "custom-project",
+            "entity": "team",
+            "name": "debug-run",
+            "group": "smoke",
+            "tags": ["unit", "test"],
+            "notes": "local smoke test",
+            "mode": "offline",
+            "job_type": "train-test",
+            "init_kwargs": {"reinit": True},
+        }
+    }
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.logging.wandb.enabled is False
+    assert config.logging.wandb.project == "custom-project"
+    assert config.logging.wandb.entity == "team"
+    assert config.logging.wandb.name == "debug-run"
+    assert config.logging.wandb.group == "smoke"
+    assert config.logging.wandb.tags == ("unit", "test")
+    assert config.logging.wandb.notes == "local smoke test"
+    assert config.logging.wandb.mode == "offline"
+    assert config.logging.wandb.job_type == "train-test"
+    assert config.logging.wandb.init_kwargs == {"reinit": True}
 
 
 def test_training_config_uses_optimizer_specific_weight_decay_defaults():
@@ -330,6 +366,13 @@ def test_composite_logger_dispatches_and_closes():
     assert second.records == [record]
     assert first.closed is True
     assert second.closed is True
+
+
+def test_wandb_logger_can_be_disabled():
+    logger = WandBLogger(_wandb_config(enabled=False), {})
+
+    logger.log_epoch(_epoch_record(epoch=1))
+    logger.close()
 
 
 def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():
@@ -536,6 +579,21 @@ def _batch_loss(value):
         force_mae=None,
         stress_mae=None,
         batch_size=1,
+    )
+
+
+def _wandb_config(**kwargs):
+    return SimpleNamespace(
+        enabled=kwargs.get("enabled", True),
+        project=kwargs.get("project", "gptff"),
+        entity=kwargs.get("entity"),
+        name=kwargs.get("name"),
+        group=kwargs.get("group"),
+        tags=kwargs.get("tags", ()),
+        notes=kwargs.get("notes"),
+        mode=kwargs.get("mode", "online"),
+        job_type=kwargs.get("job_type", "train"),
+        init_kwargs=kwargs.get("init_kwargs", {}),
     )
 
 

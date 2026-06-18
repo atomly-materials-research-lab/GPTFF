@@ -18,6 +18,9 @@ dependencies = [
     "torch>=2.12.0",
 ]
 
+[project.optional-dependencies]
+wandb = ["wandb>=0.27.2"]
+
 [tool.setuptools.packages]
 find = { include = ["gptff*"], exclude = ["test*"] }
 

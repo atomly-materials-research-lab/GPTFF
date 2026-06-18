@@ -28,6 +28,7 @@ from gptff.trainer.logger import (
     CSVLogger,
     EpochLogRecord,
     TrainingLogger,
+    WandBLogger,
 )
 from gptff.trainer.loss import (
     BatchLoss,
@@ -290,6 +291,7 @@ class Trainer:
                 [
                     CSVLogger(self.output_dir),
                     ConsoleLogger(),
+                    WandBLogger(self.config.logging.wandb, self.config.checkpoint_dict()),
                 ]
             )
         if dataset is None:

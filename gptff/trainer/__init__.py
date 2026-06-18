@@ -2,10 +2,12 @@ from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import (
     DataConfig,
     ElementReferenceConfig,
+    LoggingConfig,
     LossConfig,
     OptimizerConfig,
     TrainingConfig,
     TrainingLoopConfig,
+    WandBConfig,
     load_config,
 )
 from gptff.trainer.logger import (
@@ -14,6 +16,7 @@ from gptff.trainer.logger import (
     CSVLogger,
     EpochLogRecord,
     TrainingLogger,
+    WandBLogger,
 )
 from gptff.trainer.loss import (
     BatchLoss,
@@ -32,12 +35,15 @@ __all__ = [
     "DataConfig",
     "ElementReferenceConfig",
     "EpochLogRecord",
+    "LoggingConfig",
     "LossConfig",
     "OptimizerConfig",
     "Trainer",
     "TrainingLogger",
     "TrainingConfig",
     "TrainingLoopConfig",
+    "WandBConfig",
+    "WandBLogger",
     "compute_batch_loss",
     "load_config",
     "loss_weight_active",

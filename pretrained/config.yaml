@@ -46,6 +46,18 @@ loss:
   force_loss_weight: 1.0
   stress_loss_weight: 0.1
 
+logging:
+  wandb:
+    enabled: true
+    project: gptff
+    entity: null
+    name: null
+    group: null
+    tags: []
+    notes: null
+    mode: online
+    job_type: train
+
 data:
   dataset_path: path/to/dataset.json
   validation_fraction: 0.1
