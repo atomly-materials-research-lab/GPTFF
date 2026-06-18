@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+import torch
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter, GraphSample, batch_samples
@@ -53,6 +54,23 @@ def test_triplets_are_ordered_edge_pairs_with_same_center():
         graph.edge_index[0][graph.triplet_edge_index[0]]
         == graph.edge_index[0][graph.triplet_edge_index[1]]
     )
+
+
+def test_collinear_triplet_cosine_reaches_physical_boundary():
+    structure = Structure(
+        Lattice.cubic(10.0),
+        ["Si", "O", "O"],
+        [[0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        coords_are_cartesian=True,
+    )
+    graph = CrystalGraphConverter(radial_cutoff=1.5, angle_cutoff=1.5).convert(structure)
+
+    differentiable_graph = CrystalGraphBatch.from_graphs([graph]).with_geometry(
+        positions_requires_grad=False,
+        strain_requires_grad=False,
+    )
+
+    assert torch.count_nonzero(differentiable_graph.triplet_cosine == -1.0).item() == 2
 
 
 def test_batch_offsets_atom_and_triplet_indices():

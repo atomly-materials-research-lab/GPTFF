@@ -175,7 +175,7 @@ class CrystalGraphBatch:
             numerator = torch.sum(triplet_vec_ij * triplet_vec_ik, dim=1)
             denominator = triplet_lengths_ij * triplet_lengths_ik
             triplet_cosine = numerator / denominator.clamp_min(1e-12)
-            triplet_cosine = torch.clamp(triplet_cosine, -1.0, 1.0) * (1.0 - 1e-6)
+            triplet_cosine = torch.clamp(triplet_cosine, -1.0, 1.0)
 
         fields = dict(self.__dict__)
         fields["positions"] = strained_positions

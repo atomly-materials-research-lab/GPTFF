@@ -72,39 +72,31 @@ class RadialBesselBasis(nn.Module):
         return self.cutoff_fn(distances) * self.norm_const * radial
 
 
-class FourierAngleBasis(nn.Module):
-    def __init__(self, num_angular: int = 4, clamp_margin: float = 1e-7):
+class LegendreAngleBasis(nn.Module):
+    def __init__(self, num_angular: int = 9):
         super().__init__()
-        if num_angular < 0:
-            raise ValueError("num_angular must be non-negative.")
-        if not 0 < clamp_margin < 1:
-            raise ValueError("clamp_margin must be between 0 and 1.")
+        if num_angular <= 0:
+            raise ValueError("num_angular must be positive.")
 
         self.num_angular = int(num_angular)
-        self.out_dim = 2 * self.num_angular + 1
-        self.clamp_margin = float(clamp_margin)
+        self.out_dim = self.num_angular
         self.register_buffer(
-            "orders",
-            torch.arange(1, self.num_angular + 1, dtype=torch.float32),
+            "normalization",
+            torch.sqrt((2 * torch.arange(self.num_angular, dtype=torch.float32) + 1) / 2),
         )
 
     def forward(self, cosines: torch.Tensor) -> torch.Tensor:
         cosines = cosines.reshape(-1, 1)
-        margin = max(self.clamp_margin, torch.finfo(cosines.dtype).eps)
-        angles = torch.acos(torch.clamp(cosines, -1 + margin, 1 - margin))
+        polynomials = [torch.ones_like(cosines)]
+        if self.num_angular > 1:
+            polynomials.append(cosines)
 
-        constant = torch.full_like(cosines, 1.0 / math.sqrt(2.0))
-        if self.num_angular == 0:
-            return constant / math.sqrt(math.pi)
+        for order in range(2, self.num_angular):
+            current = (
+                (2 * order - 1) * cosines * polynomials[-1] - (order - 1) * polynomials[-2]
+            ) / order
+            polynomials.append(current)
 
-        orders = self.orders.to(dtype=cosines.dtype, device=cosines.device)
-        harmonics = angles * orders
-        basis = torch.cat(
-            [
-                constant,
-                torch.cos(harmonics),
-                torch.sin(harmonics),
-            ],
-            dim=1,
-        )
-        return basis / math.sqrt(math.pi)
+        basis = torch.cat(polynomials, dim=1)
+        normalization = self.normalization.to(dtype=cosines.dtype, device=cosines.device)
+        return basis * normalization

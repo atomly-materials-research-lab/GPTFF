@@ -244,7 +244,7 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `edge_feature_dim`: Edge feature dimension
 - `num_interaction_blocks`: Number of GPTFF interaction blocks
 - `num_radial`: Number of radial basis functions
-- `num_angular`: Number of Fourier angular basis frequencies
+- `num_angular`: Number of normalized Legendre angular basis channels
 - `radial_cutoff`: Pair graph cutoff radius
 - `angle_cutoff`: Three-body angle cutoff radius
 - `cutoff_coeff`: Polynomial cutoff envelope exponent

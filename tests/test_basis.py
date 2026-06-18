@@ -1,6 +1,6 @@
 import torch
 
-from gptff.model.basis import FourierAngleBasis, PolynomialCutoff, RadialBesselBasis
+from gptff.model.basis import LegendreAngleBasis, PolynomialCutoff, RadialBesselBasis
 
 
 def test_radial_bessel_basis_shape():
@@ -51,29 +51,58 @@ def test_radial_bessel_basis_has_finite_distance_gradients():
     assert torch.isfinite(distances.grad).all()
 
 
-def test_fourier_angle_basis_shape():
-    basis = FourierAngleBasis(num_angular=4)
+def test_legendre_angle_basis_shape():
+    basis = LegendreAngleBasis(num_angular=4)
     cosines = torch.tensor([-0.5, 0.0, 0.5])
 
     out = basis(cosines)
 
-    assert out.shape == (3, 9)
+    assert out.shape == (3, 4)
 
 
-def test_fourier_angle_basis_is_finite_at_angle_boundaries():
-    basis = FourierAngleBasis(num_angular=4)
-    cosines = torch.tensor([-1.0, -0.999999, 0.0, 0.999999, 1.0])
+def test_legendre_angle_basis_matches_normalized_low_orders():
+    basis = LegendreAngleBasis(num_angular=3)
+    cosines = torch.tensor([-0.5, 0.0, 0.5], dtype=torch.float64)
 
     out = basis(cosines)
+    polynomials = torch.stack(
+        [
+            torch.ones_like(cosines),
+            cosines,
+            0.5 * (3 * cosines.square() - 1),
+        ],
+        dim=1,
+    )
+    normalization = torch.sqrt(torch.tensor([1.0, 3.0, 5.0], dtype=torch.float64) / 2)
 
-    assert torch.isfinite(out).all()
+    assert torch.allclose(out, polynomials * normalization)
 
 
-def test_fourier_angle_basis_has_finite_cosine_gradients():
-    basis = FourierAngleBasis(num_angular=4)
-    cosines = torch.tensor([-0.9, -0.1, 0.1, 0.9], requires_grad=True)
+def test_legendre_angle_basis_has_finite_endpoint_derivatives():
+    basis = LegendreAngleBasis(num_angular=9)
+    cosines = torch.tensor([-1.0, 1.0], dtype=torch.float64, requires_grad=True)
 
     loss = basis(cosines).sum()
-    loss.backward()
+    first = torch.autograd.grad(loss, cosines, create_graph=True)[0]
+    second = torch.autograd.grad(first.sum(), cosines)[0]
 
-    assert torch.isfinite(cosines.grad).all()
+    assert torch.isfinite(first).all()
+    assert torch.isfinite(second).all()
+
+
+def test_legendre_angle_basis_has_smooth_collinear_cartesian_curvature():
+    basis = LegendreAngleBasis(num_angular=9)
+
+    def second_derivative(displacement):
+        transverse = torch.tensor(displacement, dtype=torch.float64, requires_grad=True)
+        cosine = -1.0 / torch.sqrt(1.0 + transverse.square())
+        response = basis(cosine).sum()
+        first = torch.autograd.grad(response, transverse, create_graph=True)[0]
+        return torch.autograd.grad(first, transverse)[0]
+
+    at_collinear = second_derivative(0.0)
+    near_collinear = second_derivative(1e-6)
+
+    assert torch.isfinite(at_collinear)
+    assert torch.isfinite(near_collinear)
+    assert torch.allclose(at_collinear, near_collinear, rtol=1e-8, atol=1e-8)

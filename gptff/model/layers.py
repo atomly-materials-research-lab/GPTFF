@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
-from gptff.model.basis import FourierAngleBasis
+from gptff.model.basis import LegendreAngleBasis
 
 
 def sum_aggregation(
@@ -140,7 +140,7 @@ class ThreeBodyEdgeDelta(nn.Module):
         super().__init__()
         self.atom_feature_dim = atom_feature_dim
         self.edge_feature_dim = edge_feature_dim
-        self.angle_basis = FourierAngleBasis(num_angular)
+        self.angle_basis = LegendreAngleBasis(num_angular)
 
         self.target_encoder = MLP(
             2 * atom_feature_dim + edge_feature_dim,
