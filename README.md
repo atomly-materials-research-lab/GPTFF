@@ -131,44 +131,76 @@ dyn.run(100000)
 
 ## Model training
 
-`config.json` would be training parameters, you could specify data path in this file.
-
-```bash
-gptff_trainer config.json
-```
-
-## Data 
-
-If you want to pretrain or finetune the force field based on your own dataset, you can prepare your own dataset as below:
-
-The dataset must be stored in a `.csv` file with these columns:
-
-`struct_id`: Unique structure id, e.g. 0, 1, 2, ..
-
-`energy`: Total energy of the structure (eV)
-
-`forces`: The forces of each atom (eV/Å)
-
-`stress`: The stress of the structure. The default `config.json` assumes VASP-style stress in kBar with `stress_sign = -1.0`, and converts labels internally to GPa for training.
-
-`structure`: dict format of the structure. 
+Build the complete dataset from labeled structures and pass it directly to the
+trainer:
 
 ```python
+import numpy as np
 from pymatgen.core import Structure
-struc = Structure.from_file('POSCAR')
-struc_data = struc.as_dict()
+
+from gptff.data import AtomicDataset, AtomicSample
+from gptff.trainer import Trainer, load_config
+
+structure = Structure.from_file("POSCAR")
+samples = [
+    AtomicSample(
+        structure=structure,
+        energy=-12.34,  # total energy in eV
+        forces=np.zeros((structure.num_sites, 3)),  # eV/angstrom
+        stress=np.zeros((3, 3)),  # raw VASP stress in kBar
+        sample_id="material-1-frame-0",
+        material_id="material-1",
+    ),
+]
+dataset = AtomicDataset(samples=tuple(samples), name="my-dataset")
+
+config = load_config("config.yaml")
+Trainer(config).fit(dataset)
 ```
 
-`fold`: You can specify which fold is used for validation. If `val_fold` in `config.json` is `0`, rows with `fold != 0` are used for training and rows with `fold == 0` are used for validation.
+Energy and force labels are required. Stress is optional only when
+`stress_loss_weight` is zero. GPTFF expects values extracted using the standard
+VASP conventions used by pymatgen:
 
-Elemental reference energies are configured through `training.element_refs`, not stored as a dataset column. Set `"element_refs": "atomly"` to use the built-in Atomly reference preset, provide your own mapping/list, or set `"fit_element_refs": true` to fit references from the training split.
+- `energy`: total structure energy in eV.
+- `forces`: array with shape `(num_atoms, 3)` in eV/angstrom.
+- `stress`: raw VASP `(3, 3)` matrix or six-component Voigt vector in kBar.
+  GPTFF applies the VASP sign convention and converts it to GPa internally.
 
-Label units are configured in the `data` section of `config.json`:
+Each sample can define a unique `sample_id`. Set `material_id` when multiple
+frames belong to the same material and `group_by_material` is enabled.
 
-- `energy_unit`: Currently supports `"ev"`.
-- `force_unit`: Currently supports `"ev_per_ang"`.
-- `stress_unit`: Supports `"gpa"`, `"kbar"`, and `"ev_per_ang3"`.
-- `stress_sign`: Multiplier applied before stress is converted to GPa. Use `-1.0` for VASP-style stress with the default GPTFF convention.
+`AtomicSample` and `AtomicDataset` implement Monty serialization. A complete
+dataset can be stored and restored without a separate structure table:
+
+```python
+dataset.to_file("dataset.json.gz")
+dataset = AtomicDataset.from_file("dataset.json.gz")
+```
+
+For command-line training, set `data.dataset_path` to the serialized dataset:
+
+```bash
+gptff_trainer config.yaml
+```
+
+Elemental reference energies are configured through the top-level `element_references` section, not stored as a dataset column. Set `source: atomly` to use the built-in Atomly reference preset, provide your own mapping/list as `source`, set `source: fit` to fit references from the training split, set `source: null` to disable references, or point `source` to a YAML/JSON reference file.
+
+Reference mappings must use atomic-number keys, not element symbols:
+
+```yaml
+element_references:
+  source:
+    1: -3.12
+    3: -1.45
+```
+
+The same mapping can be placed in an external file:
+
+```yaml
+element_references:
+  source: /path/to/reference_energies.yaml
+```
 
 During ASE inference, `atoms.get_stress()` follows the ASE convention and returns a six-component stress vector in eV/Å^3, even though the model's internal stress is computed in GPa.
 
@@ -205,46 +237,69 @@ atom_refs = np.array([
 
 ## Training setting
 
-The file `config.json` includes training settings, 
+The file `config.yaml` uses separate sections for model, optimizer, training loop, loss, and data settings.
 
-- workers: The number of workers for dataloader
-- epochs: The number of training epochs
-- batch_size: batch size for training, the number of structures used in one step(batch)
-- node_feature_len: The size of the node(atom) feature length
-- edge_feature_len: The size of the edge(bond) feature length
-- num_radial: Number of radial basis functions
-- num_angular: Number of Fourier angular basis frequencies
-- radial_cutoff: Pair graph cutoff radius
-- angle_cutoff: Three-body angle cutoff radius
-- cutoff_coeff: Polynomial cutoff envelope exponent
-- n_layers: The number of layers of GPTFF model
-- n_readout_layers: Number of linear layers in the atom-wise energy readout
-- interaction_dropout: Dropout probability inside non-transformer interaction blocks
-- device: `cpu` or `cuda`
-- output_dir: Directory for checkpoints and validation history
-- val_fold: Label validation data during training
-- resume: If true, restore model, optimizer, scheduler, scaler, epoch, and best validation metric from a checkpoint
-- checkpoint_path: Checkpoint path used when `resume` is true. If null, `output_dir/curr_checkpoint.pth` is used.
-- transformer_activate: If activate `transformer` block or not
-- element_refs: Elemental reference energies. Use `"atomly"`, `null`, a mapping, or a list.
-- fit_element_refs: If true, fit elemental reference energies from the training split. Do not set this together with `element_refs`.
-- element_ref_ridge: Ridge regularization used when fitting elemental reference energies.
-- energy_unit: Unit of `energy` labels in the data section. Currently `"ev"`.
-- force_unit: Unit of `forces` labels in the data section. Currently `"ev_per_ang"`.
-- stress_unit: Unit of `stress` labels in the data section. Supported values are `"gpa"`, `"kbar"`, and `"ev_per_ang3"`.
-- stress_sign: Sign multiplier for stress labels before conversion to GPa.
-- cache_graphs: If true, cache converted structure graphs in each DataLoader worker. Defaults to false.
-- graph_cache_size: Maximum cached graph samples per worker. Use `null` for unlimited cache only when the dataset is small enough.
-- weight_energy: Weight factor of the energy
-- weight_force: Weight factor of the forces
-- weight_stress: Weight factor of the stress
+`model`:
+- `atom_feature_dim`: Atom feature dimension
+- `edge_feature_dim`: Edge feature dimension
+- `num_interaction_blocks`: Number of GPTFF interaction blocks
+- `num_radial`: Number of radial basis functions
+- `num_angular`: Number of Fourier angular basis frequencies
+- `radial_cutoff`: Pair graph cutoff radius
+- `angle_cutoff`: Three-body angle cutoff radius
+- `cutoff_coeff`: Polynomial cutoff envelope exponent
+- `num_readout_layers`: Number of linear layers in the atom-wise energy readout
+- `readout_atom_norm`: If true, apply LayerNorm to atom features before the energy readout
+- `interaction_dropout`: Dropout probability inside non-transformer interaction blocks
 
-Label columns are required only when their corresponding loss weight is positive.
-For energy-only data, set `weight_force` and `weight_stress` to `0`.
-For energy-force data without stress, set `weight_stress` to `0`.
+`element_references`:
+- `source`: Elemental reference energy source. Use `"atomly"`, `"fit"`, `null`, a mapping, a list, or a YAML/JSON file path. Mapping keys must be atomic numbers.
+- `ridge`: Ridge regularization used when `source: fit`
+
+`optimizer`:
+- `name`: Optimizer name. The default is `"AdamW"`; `"Adam"`, `"RAdam"`, and `"SGD"` are also supported.
+- `learning_rate`: Optimizer learning rate
+- `weight_decay`: Optimizer weight decay. The default is `1e-2` for `AdamW` and `0` for the other optimizers.
+- `scheduler`: Learning-rate scheduler. The default is `"CosLR"`, a cosine annealing schedule. Use `"none"` to disable scheduling.
+- `scheduler_params`: Optional scheduler parameters. For `"CosLR"`, `decay_fraction` controls `eta_min = decay_fraction * learning_rate`.
+
+`training`:
+- `epochs`: Number of training epochs
+- `batch_size`: Number of structures in each batch
+- `num_workers`: Number of DataLoader workers
+- `device`: `cpu` or `cuda`
+- `amp`: If true, enable CUDA automatic mixed precision during training
+- `output_dir`: Directory for checkpoints and `history.csv`
+- `seed`: Random seed shared by Python, NumPy, PyTorch, CUDA, and DataLoader shuffling
+- `deterministic`: If true, require deterministic PyTorch algorithms and disable cuDNN benchmarking
+- `transformer_activate`: If activate the legacy transformer path or not
+
+Model checkpoints are written at epoch boundaries.
+
+`loss`:
+- `energy_loss_weight`: Weight factor of the energy loss
+- `force_loss_weight`: Weight factor of the force loss
+- `stress_loss_weight`: Weight factor of the stress loss
+
+`data`:
+- `dataset_path`: Optional path to a Monty-serialized `AtomicDataset`. This is
+  required by the command-line trainer but not by `Trainer.fit(dataset)`.
+- `validation_fraction`: Fraction of samples reserved for validation.
+- `test_fraction`: Fraction of samples reserved for testing. Use `0` to omit a
+  test split.
+- `split_seed`: Random seed used only for dataset splitting.
+- `group_by_material`: If true, all samples with the same `material_id` remain
+  in one split. Every sample must then define `material_id`.
+- `cache_graphs`: If true, cache converted structure graphs in each DataLoader worker. Defaults to false.
+- `graph_cache_size`: Maximum cached graph samples per worker. Use `null` for unlimited cache only when the dataset is small enough.
+
+Energy and force labels are always required for training.
+Stress labels are required only when `stress_loss_weight > 0`.
+For energy-force data without stress, set `stress_loss_weight` to `0`.
 Within one batch, each enabled label type must be present for every sample.
-The `structure` column may contain a pymatgen structure dictionary, a JSON string, or a Python literal dictionary string.
-Forces must have shape `(num_atoms, 3)`, and stress may be a `(3, 3)` matrix or a Voigt 6-vector ordered as `xx, yy, zz, yz, xz, xy`.
+
+The split is generated from `split_seed` whenever training starts. Using the same
+dataset order and split settings produces the same partitions.
 
 ## Reference
 

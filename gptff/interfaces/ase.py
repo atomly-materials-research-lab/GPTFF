@@ -21,9 +21,9 @@ class ASECalculator(Calculator):
 
         self.state = torch.load(model_path, map_location=torch.device(device))
 
-        training_config = dict(self.state.get("training_config", self.state["cfg"]))
-        self.unit_trans = float(training_config.get("unit_trans", 160.21766208))
-        if training_config["transformer_activate"]:
+        training_config = dict(self.state.get("training_config", self.state.get("cfg", {})))
+        training_section = training_config.get("training", training_config)
+        if training_section.get("transformer_activate", False):
             cfg = SimpleNamespace(**training_config)
             cfg.device = device
             self.model_config = GPTFFConfig.from_dict(training_config)
@@ -36,15 +36,14 @@ class ASECalculator(Calculator):
         self.model = self.model.to(device)
         self.model.eval()
         self.graph_converter = CrystalGraphConverter(
-            r_cut=self.model_config.radial_cutoff,
-            a_cut=self.model_config.angle_cutoff,
+            radial_cutoff=self.model_config.radial_cutoff,
+            angle_cutoff=self.model_config.angle_cutoff,
         )
 
-    def get_efs(self, batch):
+    def predict_properties(self, batch):
         return predict_energy_forces_stress(
             self.model,
             batch,
-            unit_trans=self.unit_trans,
             create_graph=False,
             compute_stress=True,
         )
@@ -62,11 +61,11 @@ class ASECalculator(Calculator):
 
         graph = self.graph_converter.convert_ase_atoms(atoms)
         batch = CrystalGraphBatch.from_graphs([graph]).to(self.device)
-        ener, force, stress = self.get_efs(batch)
+        energy, forces, stress = self.predict_properties(batch)
 
         self.results.update(
-            energy=float(ener.detach().cpu().item()),
-            free_energy=float(ener.detach().cpu().item()),
-            forces=force.detach().cpu().numpy(),
+            energy=float(energy.detach().cpu().item()),
+            free_energy=float(energy.detach().cpu().item()),
+            forces=forces.detach().cpu().numpy(),
             stress=stress_gpa_to_ase_voigt(stress[0].detach().cpu().numpy()),
         )

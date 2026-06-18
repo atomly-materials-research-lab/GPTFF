@@ -9,7 +9,7 @@ from gptff.graph import CrystalGraphBatch, CrystalGraphConverter, GraphSample, b
 
 def test_periodic_self_images_are_kept():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
 
     assert graph.num_edges == 6
     assert np.all(graph.edge_index[0] == 0)
@@ -31,7 +31,7 @@ def test_offset_convention_matches_edge_distance():
         ["Na", "Cl"],
         [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
     )
-    graph = CrystalGraphConverter(r_cut=3.0, a_cut=3.0).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=3.0, angle_cutoff=3.0).convert(structure)
 
     vectors = (
         graph.positions[graph.edge_index[1]]
@@ -43,7 +43,7 @@ def test_offset_convention_matches_edge_distance():
 
 def test_triplets_are_ordered_edge_pairs_with_same_center():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
 
     assert graph.num_triplets == 30
     assert graph.triplets_per_atom.tolist() == [30]
@@ -57,7 +57,7 @@ def test_triplets_are_ordered_edge_pairs_with_same_center():
 
 def test_batch_offsets_atom_and_triplet_indices():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    converter = CrystalGraphConverter(r_cut=2.1, a_cut=2.1)
+    converter = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1)
     graph_a = converter.convert(structure)
     graph_b = converter.convert(structure)
 
@@ -73,7 +73,7 @@ def test_batch_offsets_atom_and_triplet_indices():
 
 def test_converter_and_batch_keep_cutoff_metadata():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=1.9).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=1.9).convert(structure)
     batch = CrystalGraphBatch.from_graphs([graph])
 
     assert graph.radial_cutoff == pytest.approx(2.1)
@@ -84,7 +84,7 @@ def test_converter_and_batch_keep_cutoff_metadata():
 
 def test_batch_rejects_mismatched_cutoff_metadata():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
 
     with pytest.raises(ValueError, match="different radial_cutoff"):
         CrystalGraphBatch.from_graphs([graph, replace(graph, radial_cutoff=2.2)])
@@ -95,7 +95,7 @@ def test_batch_rejects_mismatched_cutoff_metadata():
 
 def test_batch_samples_collates_labels():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
     sample = GraphSample(
         graph=graph,
         energy=-1.0,
@@ -112,7 +112,7 @@ def test_batch_samples_collates_labels():
 
 def test_batch_samples_allows_missing_optional_labels():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
     sample = GraphSample(graph=graph, energy=-1.0)
 
     batch = batch_samples([sample])
@@ -124,7 +124,7 @@ def test_batch_samples_allows_missing_optional_labels():
 
 def test_batch_samples_rejects_partially_missing_labels():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
     samples = [
         GraphSample(graph=graph, energy=-1.0, stress=np.zeros((3, 3), dtype=np.float32)),
         GraphSample(graph=graph, energy=-1.0),

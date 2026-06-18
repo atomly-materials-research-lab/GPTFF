@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import torch
 
+from gptff.utils.labels import EV_PER_ANG3_TO_GPA
+
 
 def predict_energy_forces_stress(
     model,
     batch,
-    unit_trans=160.21766208,
     create_graph=False,
     *,
     compute_stress=True,
@@ -40,7 +41,7 @@ def predict_energy_forces_stress(
     if compute_stress:
         stress_grad = _optional_gradient(next(grad_iter), graph.strain, zero_energy)
         volumes = graph.volumes if create_graph else graph.volumes.detach()
-        stress = stress_grad / volumes[:, None, None] * unit_trans
+        stress = stress_grad / volumes[:, None, None] * EV_PER_ANG3_TO_GPA
     else:
         stress = None
     return energy, forces, stress

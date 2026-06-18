@@ -1,117 +1,61 @@
 from __future__ import annotations
 
-import math
+from typing import Any, Mapping
 
 import torch
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    CosineAnnealingWarmRestarts,
+    ExponentialLR,
+    MultiStepLR,
+    _LRScheduler,
+)
+
+Scheduler = _LRScheduler | CosineAnnealingWarmRestarts
 
 
-class CosineAnnealingWarmupRestarts(_LRScheduler):
-    """
-    Cosine annealing scheduler with warmup and restarts.
+def build_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    scheduler: str,
+    learning_rate: float,
+    epochs: int,
+    scheduler_params: Mapping[str, Any] | None = None,
+) -> Scheduler | None:
+    """Build the configured learning-rate scheduler."""
+    name = scheduler.lower()
+    params = dict(scheduler_params or {})
 
-    Args:
-        optimizer: Wrapped optimizer.
-        first_cycle_steps: First cycle step size.
-        cycle_mult: Cycle steps magnification.
-        max_lr: First cycle's max learning rate.
-        min_lr: Minimum learning rate.
-        warmup_steps: Linear warmup step size.
-        gamma: Decay rate of max learning rate by cycle.
-        last_epoch: The index of last epoch.
-    """
+    if name in {"none", "off", "constant"}:
+        return None
 
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        first_cycle_steps: int,
-        cycle_mult: float = 1.0,
-        max_lr: float = 0.1,
-        min_lr: float = 0.001,
-        warmup_steps: int = 0,
-        gamma: float = 1.0,
-        last_epoch: int = -1,
-    ):
-        if warmup_steps >= first_cycle_steps:
-            raise ValueError("warmup_steps must be smaller than first_cycle_steps.")
+    if name in {"cosineannealinglr", "coslr", "cos", "cosine"}:
+        decay_fraction = float(params.pop("decay_fraction", 1e-2))
+        t_max = int(params.pop("T_max", params.pop("t_max", 10 * epochs)))
+        return CosineAnnealingLR(
+            optimizer,
+            T_max=t_max,
+            eta_min=decay_fraction * learning_rate,
+            **params,
+        )
 
-        self.first_cycle_steps = first_cycle_steps
-        self.cycle_mult = cycle_mult
-        self.base_max_lr = max_lr
-        self.max_lr = max_lr
-        self.min_lr = min_lr
-        self.warmup_steps = warmup_steps
-        self.gamma = gamma
+    if name in {"cosrestartlr", "cosineannealingwarmrestarts", "cosrestart"}:
+        decay_fraction = float(params.pop("decay_fraction", 1e-2))
+        params.setdefault("T_0", 10)
+        params.setdefault("T_mult", 2)
+        return CosineAnnealingWarmRestarts(
+            optimizer,
+            eta_min=decay_fraction * learning_rate,
+            **params,
+        )
 
-        self.cur_cycle_steps = first_cycle_steps
-        self.cycle = 0
-        self.step_in_cycle = last_epoch
+    if name in {"exponentiallr", "exp", "exponential"}:
+        params.setdefault("gamma", 0.98)
+        return ExponentialLR(optimizer, **params)
 
-        super().__init__(optimizer, last_epoch)
-        self.init_lr()
+    if name in {"multisteplr", "multistep"}:
+        params.setdefault("milestones", [4 * epochs, 6 * epochs, 8 * epochs, 9 * epochs])
+        params.setdefault("gamma", 0.3)
+        return MultiStepLR(optimizer, **params)
 
-    def init_lr(self):
-        self.base_lrs = []
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = self.min_lr
-            self.base_lrs.append(self.min_lr)
-
-    def get_lr(self):
-        if self.step_in_cycle == -1:
-            return self.base_lrs
-        if self.step_in_cycle < self.warmup_steps:
-            return [
-                (self.max_lr - base_lr) * self.step_in_cycle / self.warmup_steps + base_lr
-                for base_lr in self.base_lrs
-            ]
-        return [
-            base_lr
-            + (self.max_lr - base_lr)
-            * (
-                1
-                + math.cos(
-                    math.pi
-                    * (self.step_in_cycle - self.warmup_steps)
-                    / (self.cur_cycle_steps - self.warmup_steps)
-                )
-            )
-            / 2
-            for base_lr in self.base_lrs
-        ]
-
-    def step(self, epoch=None):
-        if epoch is None:
-            epoch = self.last_epoch + 1
-            self.step_in_cycle += 1
-            if self.step_in_cycle >= self.cur_cycle_steps:
-                self.cycle += 1
-                self.step_in_cycle -= self.cur_cycle_steps
-                self.cur_cycle_steps = (
-                    int((self.cur_cycle_steps - self.warmup_steps) * self.cycle_mult)
-                    + self.warmup_steps
-                )
-        else:
-            if epoch >= self.first_cycle_steps:
-                if self.cycle_mult == 1.0:
-                    self.step_in_cycle = epoch % self.first_cycle_steps
-                    self.cycle = epoch // self.first_cycle_steps
-                else:
-                    n = int(
-                        math.log(
-                            (epoch / self.first_cycle_steps * (self.cycle_mult - 1) + 1),
-                            self.cycle_mult,
-                        )
-                    )
-                    self.cycle = n
-                    self.step_in_cycle = epoch - int(
-                        self.first_cycle_steps * (self.cycle_mult**n - 1) / (self.cycle_mult - 1)
-                    )
-                    self.cur_cycle_steps = self.first_cycle_steps * self.cycle_mult**n
-            else:
-                self.cur_cycle_steps = self.first_cycle_steps
-                self.step_in_cycle = epoch
-
-        self.max_lr = self.base_max_lr * (self.gamma**self.cycle)
-        self.last_epoch = math.floor(epoch)
-        for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
-            param_group["lr"] = lr
+    raise ValueError(f"Unsupported scheduler: {scheduler}")

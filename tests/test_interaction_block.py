@@ -8,11 +8,11 @@ from gptff.model.encoders import EdgeModulation, GeometryFeatures
 from gptff.model.layers import InteractionBlock, sum_aggregation
 
 
-def _cfg(n_layers=1, **kwargs):
+def _cfg(num_interaction_blocks=1, **kwargs):
     defaults = {
-        "node_feature_len": 8,
-        "edge_feature_len": 8,
-        "n_layers": n_layers,
+        "atom_feature_dim": 8,
+        "edge_feature_dim": 8,
+        "num_interaction_blocks": num_interaction_blocks,
         "num_radial": 8,
         "num_angular": 4,
         "radial_cutoff": 3.0,
@@ -23,13 +23,13 @@ def _cfg(n_layers=1, **kwargs):
     return GPTFFConfig(**defaults)
 
 
-def _batch(a_cut=3.0):
+def _batch(angle_cutoff=3.0):
     structure = Structure(
         Lattice.cubic(3.0),
         ["Na", "Cl"],
         [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
     )
-    graph = CrystalGraphConverter(r_cut=3.0, a_cut=a_cut).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=3.0, angle_cutoff=angle_cutoff).convert(structure)
     return CrystalGraphBatch.from_graphs([graph]).with_geometry()
 
 
@@ -38,7 +38,7 @@ def _features(model, graph):
 
 
 def test_non_transformer_model_uses_interaction_blocks():
-    model = GPTFF(_cfg(n_layers=2))
+    model = GPTFF(_cfg(num_interaction_blocks=2))
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
@@ -58,7 +58,7 @@ def test_interaction_block_returns_finite_atom_and_edge_features():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     features = _features(model, graph)
-    edge_ij = features.edge_fea
+    edge_ij = features.edge_features
 
     atom_out, edge_out = model.interactions[0](
         atom_fea,
@@ -80,7 +80,7 @@ def test_interaction_block_handles_no_edge_graph():
         [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]],
         coords_are_cartesian=True,
     )
-    graph = CrystalGraphConverter(r_cut=1.0, a_cut=1.0).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=1.0, angle_cutoff=1.0).convert(structure)
     batch = CrystalGraphBatch.from_graphs([graph]).with_geometry()
     model = GPTFF(_cfg(radial_cutoff=1.0, angle_cutoff=1.0))
 
@@ -92,14 +92,14 @@ def test_interaction_block_handles_no_edge_graph():
 
 
 def test_three_body_edge_delta_is_zero_without_angle_triplets():
-    graph = _batch(a_cut=1.0)
+    graph = _batch(angle_cutoff=1.0)
     model = GPTFF(_cfg())
 
     assert graph.triplet_edge_index.numel() == 0
 
     atom_fea = model.atom_embedding(graph.atom_types)
     features = _features(model, graph)
-    edge_ij = features.edge_fea
+    edge_ij = features.edge_features
     delta = model.interactions[0].three_body(
         model.interactions[0].triplet_atom_norm(atom_fea),
         edge_ij,
@@ -140,15 +140,15 @@ def test_interaction_block_uses_unscaled_residual_addition():
     block.edge_update = _ConstantPairDelta(value=3.0)
     block.atom_update = _ConstantAtomDelta(value=4.0)
 
-    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
-    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
-        angle_edge_basis=torch.empty((edge_ij.shape[0], 0)),
-        edge_fea=edge_ij,
+        angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
+        edge_features=edge_ij,
         edge_modulation=EdgeModulation(
-            atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
-            edge=torch.zeros_like(edge_ij),
+            atom_message=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+            edge_message=torch.zeros_like(edge_ij),
         ),
         triplet_modulation=torch.zeros_like(edge_ij),
     )
@@ -171,10 +171,10 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
 
     atom_fea = model.atom_embedding(graph.atom_types)
     features = _features(model, graph)
-    edge_ij = features.edge_fea
+    edge_ij = features.edge_features
     zero_modulation = EdgeModulation(
-        atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
-        edge=torch.zeros_like(edge_ij),
+        atom_message=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+        edge_message=torch.zeros_like(edge_ij),
     )
     zero_triplet_modulation = torch.zeros_like(edge_ij)
 
@@ -188,12 +188,12 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
         block.pair_atom_norm(atom_fea),
         edge_ij,
         graph,
-        zero_modulation.edge,
+        zero_modulation.edge_message,
     )
     atom_delta = block.atom_update(
         block.atom_norm(atom_fea),
         edge_ij,
-        zero_modulation.atom,
+        zero_modulation.atom_message,
         graph,
     )
 
@@ -207,16 +207,16 @@ def test_atom_update_uses_sum_aggregation():
     model = GPTFF(_cfg())
     block = model.interactions[0]
     block.atom_update.message_encoder = _ConstantFeature(
-        output_dim=2 * model.atom_fea_len,
+        output_dim=2 * model.atom_feature_dim,
         value=1.0,
     )
     block.atom_update.message_gate = _ConstantFeature(
-        output_dim=model.atom_fea_len,
+        output_dim=model.atom_feature_dim,
         value=1.0,
     )
 
-    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
-    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
     atom_delta = block.atom_update(
         atom_fea,
         edge_ij,
@@ -234,17 +234,17 @@ def test_three_body_update_uses_sum_aggregation():
     model = GPTFF(_cfg())
     block = model.interactions[0]
     block.three_body.target_encoder = _ConstantFeature(
-        output_dim=model.nbr_fea_len,
+        output_dim=model.edge_feature_dim,
         value=1.0,
     )
     block.three_body.source_encoder = _ConstantFeature(
-        output_dim=model.nbr_fea_len,
+        output_dim=model.edge_feature_dim,
         value=1.0,
     )
     block.three_body.output_gate = nn.Identity()
 
-    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
-    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
     triplet_delta = block.three_body(
         atom_fea,
         edge_ij,
@@ -266,11 +266,11 @@ def test_three_body_update_factorizes_target_and_source_features():
     model = GPTFF(_cfg())
     block = model.interactions[0]
     target_encoder = _RecordingConstantFeature(
-        output_dim=model.nbr_fea_len,
+        output_dim=model.edge_feature_dim,
         value=1.0,
     )
     source_encoder = _RecordingConstantFeature(
-        output_dim=model.nbr_fea_len,
+        output_dim=model.edge_feature_dim,
         value=1.0,
     )
     block.three_body.target_encoder = target_encoder
@@ -278,13 +278,13 @@ def test_three_body_update_factorizes_target_and_source_features():
     block.three_body.output_gate = nn.Identity()
 
     atom_fea = torch.arange(
-        graph.atom_types.shape[0] * model.atom_fea_len,
+        graph.atom_types.shape[0] * model.atom_feature_dim,
         dtype=torch.float32,
-    ).reshape(graph.atom_types.shape[0], model.atom_fea_len)
+    ).reshape(graph.atom_types.shape[0], model.atom_feature_dim)
     edge_ij = torch.arange(
-        graph.edge_index.shape[1] * model.nbr_fea_len,
+        graph.edge_index.shape[1] * model.edge_feature_dim,
         dtype=torch.float32,
-    ).reshape(graph.edge_index.shape[1], model.nbr_fea_len)
+    ).reshape(graph.edge_index.shape[1], model.edge_feature_dim)
     triplet_modulation = torch.ones_like(edge_ij)
 
     block.three_body(atom_fea, edge_ij, graph, triplet_modulation)
@@ -318,17 +318,17 @@ def test_interaction_block_updates_triplet_then_pair_then_atom():
     block.three_body = _ConstantTripletDelta(value=2.0)
     block.atom_update = _RecordingAtomDelta()
 
-    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
-    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
     edge_modulation = EdgeModulation(
-        atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
-        edge=torch.zeros_like(edge_ij),
+        atom_message=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+        edge_message=torch.zeros_like(edge_ij),
     )
     triplet_modulation = torch.zeros_like(edge_ij)
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
-        angle_edge_basis=torch.empty((edge_ij.shape[0], 0)),
-        edge_fea=edge_ij,
+        angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
+        edge_features=edge_ij,
         edge_modulation=edge_modulation,
         triplet_modulation=triplet_modulation,
     )

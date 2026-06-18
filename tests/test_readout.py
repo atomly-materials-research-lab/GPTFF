@@ -8,9 +8,9 @@ from gptff.model import GPTFF, GPTFFConfig
 
 def test_atomwise_readout_is_extensive_for_disconnected_copies():
     cfg = GPTFFConfig(
-        node_feature_len=8,
-        edge_feature_len=8,
-        n_layers=1,
+        atom_feature_dim=8,
+        edge_feature_dim=8,
+        num_interaction_blocks=1,
         num_radial=8,
         num_angular=4,
         radial_cutoff=2.1,
@@ -18,7 +18,7 @@ def test_atomwise_readout_is_extensive_for_disconnected_copies():
         cutoff_coeff=5,
     )
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
-    graph = CrystalGraphConverter(r_cut=2.1, a_cut=2.1).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
     doubled_graph = _make_disconnected_double_graph(graph)
     model = GPTFF(cfg)
 

@@ -208,7 +208,7 @@ class tModLodaer_t(nn.Module):
             atom_fea_len,
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
-            n_readout_layers=n_readout_layers,
+            num_readout_layers=n_readout_layers,
         )
 
     def forward(self, graph):
@@ -263,9 +263,9 @@ class GPTFF(nn.Module):
     def __init__(self, config: GPTFFConfig):
         super().__init__()
 
-        atom_fea_len = config.node_feature_len
-        nbr_fea_len = config.edge_feature_len
-        n_layers = config.n_layers
+        atom_feature_dim = config.atom_feature_dim
+        edge_feature_dim = config.edge_feature_dim
+        num_interaction_blocks = config.num_interaction_blocks
         num_radial = config.num_radial
         num_angular = config.num_angular
         radial_cutoff = config.radial_cutoff
@@ -274,43 +274,43 @@ class GPTFF(nn.Module):
         max_atomic_number = config.max_atomic_number
         element_refs = config.element_refs
 
-        self.atom_fea_len = atom_fea_len
-        self.nbr_fea_len = nbr_fea_len
+        self.atom_feature_dim = atom_feature_dim
+        self.edge_feature_dim = edge_feature_dim
         self.num_radial = num_radial
         self.num_angular = num_angular
         self.radial_cutoff = radial_cutoff
         self.angle_cutoff = angle_cutoff
         self.max_atomic_number = max_atomic_number
-        self.atom_embedding = AtomEmbedding(atom_fea_len, max_atomic_number=max_atomic_number)
+        self.atom_embedding = AtomEmbedding(atom_feature_dim, max_atomic_number=max_atomic_number)
         self.geometry_embedding = GeometryEmbedding(
-            atom_fea_len=atom_fea_len,
-            nbr_fea_len=nbr_fea_len,
+            atom_feature_dim=atom_feature_dim,
+            edge_feature_dim=edge_feature_dim,
             num_radial=num_radial,
             radial_cutoff=radial_cutoff,
             angle_cutoff=angle_cutoff,
             cutoff_coeff=cutoff_coeff,
         )
-        self.final_atom_norm = (
-            nn.LayerNorm(atom_fea_len)
-            if config.final_atom_norm
+        self.readout_atom_norm = (
+            nn.LayerNorm(atom_feature_dim)
+            if config.readout_atom_norm
             else nn.Identity()
         )
 
         self.interactions = nn.ModuleList([
             InteractionBlock(
-                atom_fea_len=atom_fea_len,
-                nbr_fea_len=nbr_fea_len,
+                atom_feature_dim=atom_feature_dim,
+                edge_feature_dim=edge_feature_dim,
                 num_angular=num_angular,
                 dropout=config.interaction_dropout,
             )
-            for _ in range(n_layers)
+            for _ in range(num_interaction_blocks)
         ])
 
         self.readout = EnergyHead(
-            atom_fea_len,
+            atom_feature_dim,
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
-            n_readout_layers=config.n_readout_layers,
+            num_readout_layers=config.num_readout_layers,
         )
 
     def _validate_graph_cutoffs(self, graph) -> None:
@@ -323,20 +323,20 @@ class GPTFF(nn.Module):
         """
 
         self._validate_graph_cutoffs(graph)
-        atom_fea = self.atom_embedding(graph.atom_types)
+        atom_features = self.atom_embedding(graph.atom_types)
         geometry_features = self.geometry_embedding(graph)
-        edge_ij = geometry_features.edge_fea
+        edge_features = geometry_features.edge_features
         
         for interaction in self.interactions:
-            atom_fea, edge_ij = interaction(
-                atom_fea,
-                edge_ij,
+            atom_features, edge_features = interaction(
+                atom_features,
+                edge_features,
                 graph,
                 geometry_features,
             )
 
-        atom_fea = self.final_atom_norm(atom_fea)
-        return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
+        atom_features = self.readout_atom_norm(atom_features)
+        return self.readout(atom_features, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
 
 
 def _validate_cutoff(name: str, graph_value: float, model_value: float) -> None:

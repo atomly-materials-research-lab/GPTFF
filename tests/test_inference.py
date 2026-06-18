@@ -8,6 +8,7 @@ from pymatgen.core import Lattice, Structure
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.inference import predict_energy_forces_stress
 from gptff.model import GPTFF, GPTFFConfig
+from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_prediction_returns_zero_unused_geometry_gradients():
@@ -17,13 +18,13 @@ def test_prediction_returns_zero_unused_geometry_gradients():
         [[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]],
         coords_are_cartesian=True,
     )
-    graph = CrystalGraphConverter(r_cut=1.0, a_cut=1.0).convert(structure)
+    graph = CrystalGraphConverter(radial_cutoff=1.0, angle_cutoff=1.0).convert(structure)
     batch = CrystalGraphBatch.from_graphs([graph])
     model = GPTFF(
         GPTFFConfig(
-            node_feature_len=8,
-            edge_feature_len=8,
-            n_layers=1,
+            atom_feature_dim=8,
+            edge_feature_dim=8,
+            num_interaction_blocks=1,
             num_radial=4,
             num_angular=2,
             radial_cutoff=1.0,
@@ -126,7 +127,6 @@ def test_stress_matches_strain_finite_difference():
     _, _, stress = predict_energy_forces_stress(
         model,
         batch,
-        unit_trans=1.0,
         create_graph=False,
         compute_stress=True,
     )
@@ -141,9 +141,9 @@ def test_stress_matches_strain_finite_difference():
     ) / (2 * step) / volume
 
     assert stress[0, strain_i, strain_j].item() == pytest.approx(
-        finite_diff_stress,
+        finite_diff_stress * EV_PER_ANG3_TO_GPA,
         rel=5e-3,
-        abs=5e-4,
+        abs=5e-2,
     )
 
 
@@ -165,7 +165,7 @@ def _two_atom_graph():
         [[0.0, 0.0, 0.0], [1.2, 0.3, 0.0]],
         coords_are_cartesian=True,
     )
-    return CrystalGraphConverter(r_cut=2.0, a_cut=2.0).convert(structure)
+    return CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0).convert(structure)
 
 
 def _energy_with_position_delta(model, graph, atom_idx, coord_idx, delta):

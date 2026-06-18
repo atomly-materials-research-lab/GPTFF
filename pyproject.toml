@@ -13,10 +13,9 @@ dependencies = [
     "ase>=3.22.1",
     "torch>=1.6",
     "pymatgen",
-    "pandas",
     "tqdm",
-    "scikit-learn",
-    "scipy",
+    "monty>=2024.5.24",
+    "PyYAML>=6.0",
 ]
 
 

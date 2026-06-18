@@ -11,13 +11,13 @@ from gptff.graph.containers import CrystalGraph
 
 @dataclass(frozen=True)
 class CrystalGraphConverter:
-    r_cut: float = 5.0
-    a_cut: float = 3.5
+    radial_cutoff: float = 5.0
+    angle_cutoff: float = 3.5
     numerical_tol: float = 1e-8
 
     def convert(self, structure: Structure) -> CrystalGraph:
         center, neighbor, offsets, distances = structure.get_neighbor_list(
-            r=self.r_cut,
+            r=self.radial_cutoff,
             numerical_tol=self.numerical_tol,
             exclude_self=True,
         )
@@ -49,7 +49,7 @@ class CrystalGraphConverter:
         triplet_edge_index, triplets_per_atom, triplets_per_edge = enumerate_triplets(
             edge_index=edge_index,
             edge_distances=distances,
-            angle_cutoff=self.a_cut,
+            angle_cutoff=self.angle_cutoff,
             num_atoms=len(structure),
             numerical_tol=self.numerical_tol,
         )
@@ -58,8 +58,8 @@ class CrystalGraphConverter:
             atom_types=np.asarray([site.specie.number for site in structure], dtype=np.int64),
             positions=np.asarray(structure.cart_coords, dtype=np.float32),
             lattice=np.asarray(structure.lattice.matrix, dtype=np.float32),
-            radial_cutoff=float(self.r_cut),
-            angle_cutoff=float(self.a_cut),
+            radial_cutoff=float(self.radial_cutoff),
+            angle_cutoff=float(self.angle_cutoff),
             edge_index=edge_index,
             edge_offsets=offsets.astype(np.float32, copy=False),
             edge_distances=distances,

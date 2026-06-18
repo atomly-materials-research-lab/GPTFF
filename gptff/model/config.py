@@ -6,9 +6,9 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class GPTFFConfig:
-    node_feature_len: int
-    edge_feature_len: int
-    n_layers: int
+    atom_feature_dim: int
+    edge_feature_dim: int
+    num_interaction_blocks: int
     num_radial: int = 16
     num_angular: int = 4
     radial_cutoff: float = 5.0
@@ -16,17 +16,17 @@ class GPTFFConfig:
     cutoff_coeff: int = 5
     max_atomic_number: int = 94
     element_refs: Any = None
-    n_readout_layers: int = 3
-    final_atom_norm: bool = True
+    num_readout_layers: int = 3
+    readout_atom_norm: bool = True
     interaction_dropout: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.node_feature_len <= 0:
-            raise ValueError("node_feature_len must be positive.")
-        if self.edge_feature_len <= 0:
-            raise ValueError("edge_feature_len must be positive.")
-        if self.n_layers <= 0:
-            raise ValueError("n_layers must be positive.")
+        if self.atom_feature_dim <= 0:
+            raise ValueError("atom_feature_dim must be positive.")
+        if self.edge_feature_dim <= 0:
+            raise ValueError("edge_feature_dim must be positive.")
+        if self.num_interaction_blocks <= 0:
+            raise ValueError("num_interaction_blocks must be positive.")
         if self.num_radial <= 0:
             raise ValueError("num_radial must be positive.")
         if self.num_angular <= 0:
@@ -39,17 +39,21 @@ class GPTFFConfig:
             raise ValueError("cutoff_coeff must be positive.")
         if self.max_atomic_number <= 0:
             raise ValueError("max_atomic_number must be positive.")
-        if self.n_readout_layers <= 0:
-            raise ValueError("n_readout_layers must be positive.")
+        if self.num_readout_layers <= 0:
+            raise ValueError("num_readout_layers must be positive.")
         if self.interaction_dropout < 0 or self.interaction_dropout >= 1:
             raise ValueError("interaction_dropout must be in the range [0, 1).")
 
     @classmethod
     def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFConfig":
         return cls(
-            node_feature_len=int(raw_config["node_feature_len"]),
-            edge_feature_len=int(raw_config["edge_feature_len"]),
-            n_layers=int(raw_config["n_layers"]),
+            atom_feature_dim=int(_config_value(raw_config, "atom_feature_dim", "node_feature_len")),
+            edge_feature_dim=int(_config_value(raw_config, "edge_feature_dim", "edge_feature_len")),
+            num_interaction_blocks=int(_config_value(
+                raw_config,
+                "num_interaction_blocks",
+                "n_layers",
+            )),
             num_radial=int(raw_config.get("num_radial", 16)),
             num_angular=int(raw_config.get("num_angular", 4)),
             radial_cutoff=float(raw_config.get("radial_cutoff", 5.0)),
@@ -57,10 +61,36 @@ class GPTFFConfig:
             cutoff_coeff=int(raw_config.get("cutoff_coeff", 5)),
             max_atomic_number=int(raw_config.get("max_atomic_number", 94)),
             element_refs=raw_config.get("element_refs", None),
-            n_readout_layers=int(raw_config.get("n_readout_layers", 3)),
-            final_atom_norm=bool(raw_config.get("final_atom_norm", True)),
+            num_readout_layers=int(_config_value(
+                raw_config,
+                "num_readout_layers",
+                "n_readout_layers",
+                default=3,
+            )),
+            readout_atom_norm=bool(_config_value(
+                raw_config,
+                "readout_atom_norm",
+                "final_atom_norm",
+                default=True,
+            )),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _config_value(
+    config: Mapping[str, Any],
+    key: str,
+    legacy_key: str,
+    *,
+    default: Any = None,
+) -> Any:
+    if key in config:
+        return config[key]
+    if legacy_key in config:
+        return config[legacy_key]
+    if default is not None:
+        return default
+    raise KeyError(key)

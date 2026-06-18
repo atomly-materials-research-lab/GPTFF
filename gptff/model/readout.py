@@ -280,25 +280,25 @@ def _build_from_sequence(
 class EnergyHead(nn.Module):
     def __init__(
         self,
-        atom_fea_len,
+        atom_feature_dim,
         max_atomic_number=94,
         element_refs=None,
-        n_readout_layers=3,
+        num_readout_layers=3,
     ):
         super().__init__()
         self.max_atomic_number = int(max_atomic_number)
-        self.n_readout_layers = int(n_readout_layers)
-        if self.n_readout_layers <= 0:
-            raise ValueError("n_readout_layers must be positive.")
+        self.num_readout_layers = int(num_readout_layers)
+        if self.num_readout_layers <= 0:
+            raise ValueError("num_readout_layers must be positive.")
 
         hidden_layers = []
-        for _ in range(self.n_readout_layers - 1):
+        for _ in range(self.num_readout_layers - 1):
             hidden_layers.extend([
-                nn.Linear(atom_fea_len, atom_fea_len),
+                nn.Linear(atom_feature_dim, atom_feature_dim),
                 nn.SiLU(),
             ])
         self.hidden_mlp = nn.Sequential(*hidden_layers)
-        self.output_layer = nn.Linear(atom_fea_len, 1)
+        self.output_layer = nn.Linear(atom_feature_dim, 1)
         self.register_buffer(
             "element_refs",
             build_element_ref_tensor(
@@ -307,8 +307,8 @@ class EnergyHead(nn.Module):
             ),
         )
 
-    def residual_site_energy(self, atom_fea):
-        return self.output_layer(self.hidden_mlp(atom_fea))
+    def residual_site_energy(self, atom_features):
+        return self.output_layer(self.hidden_mlp(atom_features))
 
     def reference_site_energy(self, atom_types, reference):
         if self.element_refs is not None:
@@ -318,8 +318,8 @@ class EnergyHead(nn.Module):
             )
         return torch.zeros_like(reference)
 
-    def forward_with_site_energies(self, atom_fea, atom_types, atom_batch, num_graphs):
-        residual_site_energy = self.residual_site_energy(atom_fea)
+    def forward_with_site_energies(self, atom_features, atom_types, atom_batch, num_graphs):
+        residual_site_energy = self.residual_site_energy(atom_features)
         reference_site_energy = self.reference_site_energy(atom_types, residual_site_energy)
         site_energy = residual_site_energy + reference_site_energy
 
@@ -336,9 +336,9 @@ class EnergyHead(nn.Module):
             reference_site_energy=reference_site_energy,
         )
 
-    def forward(self, atom_fea, atom_types, atom_batch, num_graphs):
+    def forward(self, atom_features, atom_types, atom_batch, num_graphs):
         return self.forward_with_site_energies(
-            atom_fea,
+            atom_features,
             atom_types,
             atom_batch,
             num_graphs,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,30 +11,35 @@ from typing import Dict, Optional, Sequence
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from gptff.data import (
+    AtomicDataset,
     apply_fitted_element_refs,
-    build_datasets,
+    build_graph_datasets,
     build_loaders,
+    load_atomic_dataset,
 )
 from gptff.model import GPTFF, tModLodaer_t
-from gptff.trainer.checkpoint import (
-    LoadedCheckpoint,
-    load_training_checkpoint,
-    resolve_checkpoint_path,
-    save_checkpoint,
-)
+from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import TrainingConfig, load_config
 from gptff.trainer.loss import (
     BatchLoss,
     compute_batch_loss,
-    loss_weight_active,
-    mae,
-    validate_required_labels,
 )
-from gptff.trainer.scheduler import CosineAnnealingWarmupRestarts
+from gptff.trainer.logger import (
+    CSVLogger,
+    CompositeLogger,
+    ConsoleLogger,
+    EpochLogRecord,
+    TrainingLogger,
+)
+from gptff.utils.reproducibility import (
+    configure_reproducibility,
+    create_data_loader_generators,
+)
+from gptff.trainer.scheduler import Scheduler, build_lr_scheduler
 
 
 @dataclass
@@ -86,12 +92,6 @@ def _format_meter(meter: AverageMeter, precision: int) -> str:
     return f"{meter.val:.{precision}f} ({meter.avg:.{precision}f})"
 
 
-def _format_meter_avg(meter: AverageMeter, precision: int) -> str:
-    if meter.count == 0:
-        return "n/a"
-    return f"{meter.avg:.{precision}f}"
-
-
 def _meter_avg_or_nan(meter: AverageMeter) -> float:
     return meter.avg if meter.count > 0 else float("nan")
 
@@ -110,7 +110,7 @@ def select_validation_metric(metrics: EpochMetrics) -> float:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Graph-based Pretrained Transformer Force Field.")
-    parser.add_argument("config", metavar="OPTIONS", help="Configs for training")
+    parser.add_argument("config", metavar="CONFIG", help="YAML training configuration")
     return parser.parse_args(argv)
 
 
@@ -124,38 +124,46 @@ def count_parameters(model: torch.nn.Module) -> int:
 
 
 def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Optimizer:
-    return optim.AdamW(model.parameters(), config.lr, weight_decay=config.weight_decay)
+    optimizer_name = config.optimizer_name.lower()
+    if optimizer_name == "adam":
+        return optim.Adam(model.parameters(), config.lr, weight_decay=config.weight_decay)
+    if optimizer_name == "adamw":
+        return optim.AdamW(model.parameters(), config.lr, weight_decay=config.weight_decay)
+    if optimizer_name == "radam":
+        return optim.RAdam(model.parameters(), config.lr, weight_decay=config.weight_decay)
+    if optimizer_name == "sgd":
+        return optim.SGD(model.parameters(), config.lr, momentum=0.9, weight_decay=config.weight_decay)
+    raise ValueError(f"Unsupported optimizer: {config.optimizer_name}")
 
 
 def build_scheduler(
     optimizer: optim.Optimizer,
     config: TrainingConfig,
-    *,
-    start_epoch: Optional[int] = None,
-) -> CosineAnnealingWarmupRestarts:
-    scheduler = CosineAnnealingWarmupRestarts(
+) -> Scheduler | None:
+    return build_lr_scheduler(
         optimizer,
-        first_cycle_steps=config.num_train_steps,
-        cycle_mult=1,
-        max_lr=config.lr,
-        min_lr=config.min_lr,
-        warmup_steps=config.warmup_steps,
-        gamma=1.0,
+        scheduler=config.scheduler,
+        learning_rate=config.lr,
+        epochs=config.epochs,
+        scheduler_params=config.scheduler_params,
     )
-    scheduler.step(config.start_epoch if start_epoch is None else start_epoch)
-    return scheduler
+
+
+def scheduler_step_batches(num_batches: int, steps_per_epoch: int = 10) -> set[int]:
+    if num_batches <= 0 or steps_per_epoch <= 0:
+        return set()
+    return {
+        min(num_batches, max(1, math.ceil(num_batches * step / steps_per_epoch)))
+        for step in range(1, steps_per_epoch + 1)
+    }
 
 
 def use_cuda_amp(config: TrainingConfig) -> bool:
-    return torch.device(config.device).type == "cuda"
+    return bool(config.amp) and torch.device(config.device).type == "cuda"
 
 
-def should_skip_batch(batch_loss: BatchLoss, config: TrainingConfig) -> bool:
-    if not torch.isfinite(batch_loss.loss):
-        return True
-    if config.max_loss_skip is not None and batch_loss.loss.detach().item() > config.max_loss_skip:
-        return True
-    return False
+def has_nonfinite_loss(batch_loss: BatchLoss) -> bool:
+    return not bool(torch.isfinite(batch_loss.loss).item())
 
 
 def update_metrics(metrics: EpochMetrics, batch_loss: BatchLoss) -> None:
@@ -173,6 +181,7 @@ def train_one_epoch(
     model: torch.nn.Module,
     criterion: nn.Module,
     optimizer: optim.Optimizer,
+    scheduler: Scheduler | None,
     scaler: GradScaler,
     config: TrainingConfig,
     *,
@@ -180,13 +189,14 @@ def train_one_epoch(
 ) -> EpochMetrics:
     model.train()
     metrics = EpochMetrics.create()
+    scheduler_batches = scheduler_step_batches(len(train_loader))
 
     for batch_idx, batch in enumerate(train_loader, start=1):
         batch = batch.to(config.device)
         if progress is not None:
             progress.update(1)
 
-        with autocast(enabled=use_cuda_amp(config)):
+        with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(
                 model,
                 batch,
@@ -195,7 +205,7 @@ def train_one_epoch(
                 create_graph=True,
             )
 
-        if should_skip_batch(batch_loss, config):
+        if has_nonfinite_loss(batch_loss):
             metrics.skipped_batches += 1
             continue
 
@@ -205,6 +215,8 @@ def train_one_epoch(
         torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip_norm)
         scaler.step(optimizer)
         scaler.update()
+        if scheduler is not None and batch_idx in scheduler_batches:
+            scheduler.step()
 
         update_metrics(metrics, batch_loss)
         if progress is not None:
@@ -232,7 +244,7 @@ def validate(
         if progress is not None:
             progress.update(1)
 
-        with autocast(enabled=use_cuda_amp(config)):
+        with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(
                 model,
                 batch,
@@ -241,7 +253,7 @@ def validate(
                 create_graph=False,
             )
 
-        if should_skip_batch(batch_loss, config):
+        if has_nonfinite_loss(batch_loss):
             metrics.skipped_batches += 1
             continue
 
@@ -255,121 +267,172 @@ def validate(
     return metrics
 
 
-def append_validation_history(output_dir: Path, metrics: EpochMetrics) -> None:
-    with open(output_dir / "val_history.txt", "a+") as fp:
-        fp.write(
-            f"{_meter_avg_or_nan(metrics.energy_mae):.4f} "
-            f"{_meter_avg_or_nan(metrics.force_mae):.4f} "
-            f"{_meter_avg_or_nan(metrics.stress_mae):.4f}\n"
-        )
+def optimizer_lr(optimizer: optim.Optimizer) -> float:
+    return float(optimizer.param_groups[0]["lr"])
 
 
-def run_training(config: TrainingConfig) -> float:
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    train_dataset, val_dataset = build_datasets(config)
-    apply_fitted_element_refs(config, train_dataset)
-    train_loader, val_loader = build_loaders(config, train_dataset, val_dataset)
-
-    model = build_model(config)
-    print(f"Number of Model parameters: {count_parameters(model)}")
-
-    criterion = nn.HuberLoss()
-    optimizer = build_optimizer(model, config)
-    scheduler = build_scheduler(
-        optimizer,
-        config,
-        start_epoch=0 if config.resume else config.start_epoch,
+def build_epoch_log_record(
+    *,
+    epoch: int,
+    lr: float,
+    train_metrics: EpochMetrics,
+    val_metrics: EpochMetrics,
+) -> EpochLogRecord:
+    return EpochLogRecord(
+        epoch=int(epoch),
+        lr=float(lr),
+        train_loss=_meter_avg_or_nan(train_metrics.loss),
+        train_energy_mae=_meter_avg_or_nan(train_metrics.energy_mae),
+        train_force_mae=_meter_avg_or_nan(train_metrics.force_mae),
+        train_stress_mae=_meter_avg_or_nan(train_metrics.stress_mae),
+        train_skipped_batches=int(train_metrics.skipped_batches),
+        val_loss=_meter_avg_or_nan(val_metrics.loss),
+        val_energy_mae=_meter_avg_or_nan(val_metrics.energy_mae),
+        val_force_mae=_meter_avg_or_nan(val_metrics.force_mae),
+        val_stress_mae=_meter_avg_or_nan(val_metrics.stress_mae),
+        val_skipped_batches=int(val_metrics.skipped_batches),
     )
-    scaler = GradScaler(enabled=use_cuda_amp(config))
 
-    best_mae_error = 1e12
-    start_epoch = config.start_epoch
-    if config.resume:
-        checkpoint_path = resolve_checkpoint_path(config, output_dir)
-        checkpoint = load_training_checkpoint(
-            checkpoint_path,
-            model,
-            optimizer,
-            device=config.device,
-            scheduler=scheduler,
-            scaler=scaler,
+
+class Trainer:
+    def __init__(self, config: TrainingConfig, logger: TrainingLogger | None = None):
+        self.config = config
+        self.output_dir = Path(config.output_dir)
+        self.criterion: nn.Module = nn.HuberLoss()
+        self.model: torch.nn.Module | None = None
+        self.optimizer: optim.Optimizer | None = None
+        self.scheduler: Scheduler | None = None
+        self.scaler: GradScaler | None = None
+        self.train_loader = None
+        self.val_loader = None
+        self.test_loader = None
+        self.data_loader_generators: dict[str, torch.Generator] = {}
+        self.best_validation_metric = 1e12
+        self.logger = logger
+
+    def setup(self, dataset: AtomicDataset | None = None) -> None:
+        configure_reproducibility(self.config.seed, self.config.deterministic)
+        self.data_loader_generators = create_data_loader_generators(self.config.seed)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.logger is None:
+            self.logger = CompositeLogger(
+                [
+                    CSVLogger(self.output_dir),
+                    ConsoleLogger(),
+                ]
+            )
+        if dataset is None:
+            dataset = load_atomic_dataset(self.config)
+        if not isinstance(dataset, AtomicDataset):
+            raise TypeError("dataset must be an AtomicDataset.")
+        datasets = build_graph_datasets(
+            dataset,
+            self.config,
         )
-        start_epoch = checkpoint.epoch
-        best_mae_error = checkpoint.best_mae_error
-        print(f"Resumed training from {checkpoint_path} at epoch {start_epoch}.")
-
-    bar_format = "{l_bar}{bar:40}| [{elapsed}<{remaining}{postfix}]"
-
-    for epoch in range(start_epoch, config.epochs):
-        print(f"Epoch: [{epoch + 1}/ {config.epochs}], lr: {scheduler.get_lr()[0]:.4e}")
-        sys.stdout.flush()
-
-        pbar_train = tqdm(
-            train_loader,
-            total=len(train_loader),
-            mininterval=0.1,
-            ascii=True,
-            position=0,
-            unit="s",
-            bar_format=bar_format,
+        apply_fitted_element_refs(self.config, datasets.train)
+        loaders = build_loaders(
+            self.config,
+            datasets,
+            generators=self.data_loader_generators,
         )
-        pbar_val = tqdm(
-            val_loader,
-            total=len(val_loader),
-            mininterval=0.1,
-            ascii=True,
-            position=0,
-            unit="s",
-            bar_format=bar_format,
-            leave=False,
-        )
+        self.train_loader = loaders.train
+        self.val_loader = loaders.validation
+        self.test_loader = loaders.test
 
-        train_one_epoch(
-            train_loader,
-            model,
-            criterion,
-            optimizer,
-            scaler,
-            config,
-            progress=pbar_train,
-        )
-        val_metrics = validate(
-            val_loader,
-            model,
-            criterion,
-            config,
-            progress=pbar_val,
-        )
-        pbar_train.set_postfix_str(
-            f"val_loss: {_format_meter_avg(val_metrics.loss, 5)} "
-            f"val_MAE(e): {_format_meter_avg(val_metrics.energy_mae, 5)}, "
-            f"val_MAE(f): {_format_meter_avg(val_metrics.force_mae, 5)}, "
-            f"val_MAE(s): {_format_meter_avg(val_metrics.stress_mae, 3)}"
-        )
-        pbar_train.close()
-        pbar_val.close()
+        self.model = build_model(self.config)
+        print(f"Number of Model parameters: {count_parameters(self.model)}")
 
-        append_validation_history(output_dir, val_metrics)
-        scheduler.step()
+        self.optimizer = build_optimizer(self.model, self.config)
+        self.scheduler = build_scheduler(self.optimizer, self.config)
+        self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
 
-        validation_metric = select_validation_metric(val_metrics)
-        is_best = validation_metric < best_mae_error
-        best_mae_error = min(validation_metric, best_mae_error)
-        save_checkpoint(
-            output_dir,
-            model,
-            optimizer,
-            config,
-            epoch=epoch + 1,
-            best_mae_error=best_mae_error,
-            is_best=is_best,
-            scheduler=scheduler,
-            scaler=scaler,
+    def train_epoch(self, *, progress=None) -> EpochMetrics:
+        return train_one_epoch(
+            self.train_loader,
+            self.model,
+            self.criterion,
+            self.optimizer,
+            self.scheduler,
+            self.scaler,
+            self.config,
+            progress=progress,
         )
 
-    return best_mae_error
+    def validate(self, *, progress=None) -> EpochMetrics:
+        return validate(
+            self.val_loader,
+            self.model,
+            self.criterion,
+            self.config,
+            progress=progress,
+        )
+
+    def fit(self, dataset: AtomicDataset | None = None) -> float:
+        self.setup(dataset)
+        bar_format = "{l_bar}{bar:40}| [{elapsed}<{remaining}{postfix}]"
+
+        try:
+            for epoch in range(self.config.epochs):
+                lr = optimizer_lr(self.optimizer)
+                print(f"Epoch: [{epoch + 1}/ {self.config.epochs}], lr: {lr:.4e}")
+                sys.stdout.flush()
+
+                pbar_train = tqdm(
+                    self.train_loader,
+                    total=len(self.train_loader),
+                    mininterval=0.1,
+                    ascii=True,
+                    position=0,
+                    unit="s",
+                    bar_format=bar_format,
+                )
+                pbar_val = tqdm(
+                    self.val_loader,
+                    total=len(self.val_loader),
+                    mininterval=0.1,
+                    ascii=True,
+                    position=0,
+                    unit="s",
+                    bar_format=bar_format,
+                    leave=False,
+                )
+
+                train_metrics = self.train_epoch(progress=pbar_train)
+                val_metrics = self.validate(progress=pbar_val)
+                pbar_train.close()
+                pbar_val.close()
+
+                self.logger.log_epoch(
+                    build_epoch_log_record(
+                        epoch=epoch + 1,
+                        lr=lr,
+                        train_metrics=train_metrics,
+                        val_metrics=val_metrics,
+                    )
+                )
+
+                validation_metric = select_validation_metric(val_metrics)
+                is_best = validation_metric < self.best_validation_metric
+                self.best_validation_metric = min(validation_metric, self.best_validation_metric)
+                save_checkpoint(
+                    self.output_dir,
+                    self.model,
+                    self.config,
+                    epoch=epoch + 1,
+                    best_validation_metric=self.best_validation_metric,
+                    is_best=is_best,
+                )
+        finally:
+            self.logger.close()
+
+        return self.best_validation_metric
+
+
+def run_training(
+    config: TrainingConfig,
+    dataset: AtomicDataset | None = None,
+) -> float:
+    return Trainer(config).fit(dataset)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

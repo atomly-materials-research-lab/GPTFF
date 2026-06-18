@@ -12,7 +12,7 @@ from gptff.model.readout import (
 
 
 def test_energy_head_is_extensive_for_learned_site_energy():
-    head = EnergyHead(atom_fea_len=4)
+    head = EnergyHead(atom_feature_dim=4)
     atom_fea = torch.randn(3, 4)
     atom_types = torch.tensor([1, 1, 1], dtype=torch.long)
     atom_batch = torch.tensor([0, 0, 0], dtype=torch.long)
@@ -24,7 +24,7 @@ def test_energy_head_is_extensive_for_learned_site_energy():
 
 
 def test_energy_head_respects_readout_depth():
-    head = EnergyHead(atom_fea_len=4, n_readout_layers=4)
+    head = EnergyHead(atom_feature_dim=4, num_readout_layers=4)
 
     hidden_linear_layers = [
         module for module in head.hidden_mlp if isinstance(module, torch.nn.Linear)
@@ -35,7 +35,7 @@ def test_energy_head_respects_readout_depth():
 
 
 def test_energy_head_uses_default_output_initialization():
-    head = EnergyHead(atom_fea_len=4)
+    head = EnergyHead(atom_feature_dim=4)
 
     assert not torch.equal(
         head.output_layer.weight,
@@ -45,7 +45,7 @@ def test_energy_head_uses_default_output_initialization():
 
 def test_energy_head_adds_element_reference_energies():
     head = EnergyHead(
-        atom_fea_len=4,
+        atom_feature_dim=4,
         max_atomic_number=3,
         element_refs={"1": -1.5, "3": 2.0},
     )
@@ -63,7 +63,7 @@ def test_energy_head_adds_element_reference_energies():
 
 def test_energy_head_exposes_site_energy_decomposition():
     head = EnergyHead(
-        atom_fea_len=4,
+        atom_feature_dim=4,
         max_atomic_number=3,
         element_refs={"1": -1.5, "3": 2.0},
     )
@@ -86,14 +86,14 @@ def test_energy_head_exposes_site_energy_decomposition():
 
 
 def test_energy_head_accepts_one_indexed_reference_sequence():
-    head = EnergyHead(atom_fea_len=4, max_atomic_number=3, element_refs=[-1.0, 0.0, 2.0])
+    head = EnergyHead(atom_feature_dim=4, max_atomic_number=3, element_refs=[-1.0, 0.0, 2.0])
 
     assert head.element_refs.shape == (4,)
     assert torch.allclose(head.element_refs, torch.tensor([0.0, -1.0, 0.0, 2.0]))
 
 
 def test_energy_head_accepts_named_element_reference_preset():
-    head = EnergyHead(atom_fea_len=4, max_atomic_number=3, element_refs="atomly")
+    head = EnergyHead(atom_feature_dim=4, max_atomic_number=3, element_refs="atomly")
     for param in head.parameters():
         torch.nn.init.zeros_(param)
 
