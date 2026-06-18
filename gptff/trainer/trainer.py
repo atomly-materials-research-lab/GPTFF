@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import gc
 import math
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
-from tqdm import tqdm
 
 from gptff.data import (
     AtomicDataset,
@@ -59,15 +57,6 @@ class EpochMetrics:
             stress_mae=AverageMeter(),
         )
 
-    def as_postfix(self) -> dict[str, str]:
-        return {
-            "loss": _format_meter(self.loss, precision=5),
-            "MAE(e)": _format_meter(self.energy_mae, precision=5),
-            "MAE(f)": _format_meter(self.force_mae, precision=5),
-            "MAE(s)": _format_meter(self.stress_mae, precision=3),
-            "skip": str(self.skipped_batches),
-        }
-
 
 class AverageMeter:
     def __init__(self) -> None:
@@ -84,12 +73,6 @@ class AverageMeter:
         self.sum += float(val) * n
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0.0
-
-
-def _format_meter(meter: AverageMeter, precision: int) -> str:
-    if meter.count == 0:
-        return "n/a"
-    return f"{meter.val:.{precision}f} ({meter.avg:.{precision}f})"
 
 
 def _meter_avg_or_nan(meter: AverageMeter) -> float:
@@ -186,8 +169,6 @@ def train_one_epoch(
     scheduler: Scheduler | None,
     scaler: GradScaler,
     config: TrainingConfig,
-    *,
-    progress=None,
 ) -> EpochMetrics:
     model.train()
     metrics = EpochMetrics.create()
@@ -195,8 +176,6 @@ def train_one_epoch(
 
     for batch_idx, batch in enumerate(train_loader, start=1):
         batch = batch.to(config.device)
-        if progress is not None:
-            progress.update(1)
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(
@@ -221,9 +200,6 @@ def train_one_epoch(
             scheduler.step()
 
         update_metrics(metrics, batch_loss)
-        if progress is not None:
-            progress.set_description(f"[{batch_idx}/{len(train_loader)}]")
-            progress.set_postfix(metrics.as_postfix())
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -235,16 +211,12 @@ def validate(
     model: torch.nn.Module,
     criterion: nn.Module,
     config: TrainingConfig,
-    *,
-    progress=None,
 ) -> EpochMetrics:
     model.eval()
     metrics = EpochMetrics.create()
 
-    for batch_idx, batch in enumerate(val_loader, start=1):
+    for batch in val_loader:
         batch = batch.to(config.device)
-        if progress is not None:
-            progress.update(1)
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(
@@ -260,9 +232,6 @@ def validate(
             continue
 
         update_metrics(metrics, batch_loss)
-        if progress is not None:
-            progress.set_description(f"[{batch_idx}/{len(val_loader)}]")
-            progress.set_postfix(metrics.as_postfix())
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -348,7 +317,7 @@ class Trainer:
         self.scheduler = build_scheduler(self.optimizer, self.config)
         self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
 
-    def train_epoch(self, *, progress=None) -> EpochMetrics:
+    def train_epoch(self) -> EpochMetrics:
         return train_one_epoch(
             self.train_loader,
             self.model,
@@ -357,52 +326,26 @@ class Trainer:
             self.scheduler,
             self.scaler,
             self.config,
-            progress=progress,
         )
 
-    def validate(self, *, progress=None) -> EpochMetrics:
+    def validate(self) -> EpochMetrics:
         return validate(
             self.val_loader,
             self.model,
             self.criterion,
             self.config,
-            progress=progress,
         )
 
     def fit(self, dataset: AtomicDataset | None = None) -> float:
         self.setup(dataset)
-        bar_format = "{l_bar}{bar:40}| [{elapsed}<{remaining}{postfix}]"
 
         try:
             for epoch in range(self.config.epochs):
                 lr = optimizer_lr(self.optimizer)
                 print(f"Epoch: [{epoch + 1}/ {self.config.epochs}], lr: {lr:.4e}")
-                sys.stdout.flush()
 
-                pbar_train = tqdm(
-                    self.train_loader,
-                    total=len(self.train_loader),
-                    mininterval=0.1,
-                    ascii=True,
-                    position=0,
-                    unit="s",
-                    bar_format=bar_format,
-                )
-                pbar_val = tqdm(
-                    self.val_loader,
-                    total=len(self.val_loader),
-                    mininterval=0.1,
-                    ascii=True,
-                    position=0,
-                    unit="s",
-                    bar_format=bar_format,
-                    leave=False,
-                )
-
-                train_metrics = self.train_epoch(progress=pbar_train)
-                val_metrics = self.validate(progress=pbar_val)
-                pbar_train.close()
-                pbar_val.close()
+                train_metrics = self.train_epoch()
+                val_metrics = self.validate()
 
                 self.logger.log_epoch(
                     build_epoch_log_record(

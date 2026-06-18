@@ -156,6 +156,15 @@ def test_training_config_parses_canonical_sections_without_legacy_keys():
     }
 
 
+def test_training_config_defaults_num_workers_to_four():
+    raw_config = _canonical_config()
+    raw_config["training"].pop("num_workers")
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.training.num_workers == 4
+
+
 def test_training_config_uses_optimizer_specific_weight_decay_defaults():
     raw_config = _canonical_config()
     raw_config["optimizer"].pop("name")

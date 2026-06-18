@@ -3,8 +3,8 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gptff"
-version = "1.0.1"
+name = "GPTFF"
+version = "0.0.1"
 description = "Graph-based Pretrained Transformer Force Field."
 authors = [
     {name = "Fankai Xie", email = "fankaixiee@gmail.com"},
@@ -13,14 +13,10 @@ authors = [
 requires-python = ">=3.10"
 
 dependencies = [
-    "ase>=3.22.1",
-    "torch>=1.6",
-    "pymatgen",
-    "tqdm",
-    "monty>=2024.5.24",
-    "PyYAML>=6.0",
+    "pymatgen>=2026.5.4",
+    "ase>=3.28.0",
+    "torch>=2.12.0",
 ]
-
 
 [tool.setuptools.packages]
 find = { include = ["gptff*"], exclude = ["test*"] }

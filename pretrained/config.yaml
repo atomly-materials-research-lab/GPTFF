@@ -5,7 +5,7 @@ model:
   num_radial: 9
   num_angular: 4
   radial_cutoff: 5.0
-  angle_cutoff: 3.5
+  angle_cutoff: 4.0
   cutoff_coeff: 5
   max_atomic_number: 94
   num_readout_layers: 3
@@ -33,7 +33,7 @@ optimizer:
 training:
   epochs: 100
   batch_size: 128
-  num_workers: 20
+  num_workers: 4
   device: cuda
   amp: false
   output_dir: .

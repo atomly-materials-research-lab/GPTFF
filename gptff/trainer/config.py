@@ -44,8 +44,8 @@ class OptimizerConfig:
 class TrainingLoopConfig:
     epochs: int
     batch_size: int
-    num_workers: int
     device: str
+    num_workers: int = 4
     amp: bool = False
     output_dir: str = "."
     grad_clip_norm: float = 10.0
@@ -155,8 +155,8 @@ class TrainingConfig:
             training=TrainingLoopConfig(
                 epochs=epochs,
                 batch_size=int(training["batch_size"]),
-                num_workers=int(_config_value(training, "num_workers", "workers")),
                 device=str(training["device"]),
+                num_workers=int(_config_value(training, "num_workers", "workers", default=4)),
                 amp=bool(training.get("amp", False)),
                 output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
                 grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
