@@ -1,16 +1,11 @@
 import torch
 import torch.nn as nn
-import pytest
 from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.model import GPTFF, GPTFFConfig
 from gptff.model.encoders import EdgeModulation, GeometryFeatures
-from gptff.model.layers import (
-    InteractionBlock,
-    edge_counts_per_center,
-    normalize_aggregation,
-)
+from gptff.model.layers import InteractionBlock, sum_aggregation
 
 
 def _cfg(n_layers=1, **kwargs):
@@ -25,7 +20,7 @@ def _cfg(n_layers=1, **kwargs):
         "cutoff_coeff": 5,
     }
     defaults.update(kwargs)
-    return GPTFFNetConfig(**defaults)
+    return GPTFFConfig(**defaults)
 
 
 def _batch(a_cut=3.0):
@@ -43,23 +38,23 @@ def _features(model, graph):
 
 
 def test_non_transformer_model_uses_interaction_blocks():
-    model = GPTFFNet(_cfg(n_layers=2))
+    model = GPTFF(_cfg(n_layers=2))
 
     assert len(model.interactions) == 2
     assert isinstance(model.interactions[0], InteractionBlock)
     assert isinstance(model.interactions[0].pair_atom_norm, nn.LayerNorm)
+    assert isinstance(model.interactions[0].triplet_atom_norm, nn.LayerNorm)
     assert isinstance(model.interactions[0].atom_norm, nn.LayerNorm)
     assert not hasattr(model.interactions[0], "triplet_edge_norm")
     assert not hasattr(model.interactions[0], "pair_edge_norm")
     assert not hasattr(model.interactions[0], "atom_edge_norm")
-    assert model.interactions[0].residual_scale == 1.0
-    assert model.interactions[0].residual_zero_init is True
-    assert model.interactions[0].aggregation_norm == "sqrt"
+    assert not hasattr(model.interactions[0], "residual_zero_init")
+    assert not hasattr(model.interactions[0].edge_update, "message_projection")
 
 
 def test_interaction_block_returns_finite_atom_and_edge_features():
     graph = _batch()
-    model = GPTFFNet(_cfg())
+    model = GPTFF(_cfg())
 
     atom_fea = model.atom_embedding(graph.atom_types)
     features = _features(model, graph)
@@ -87,7 +82,7 @@ def test_interaction_block_handles_no_edge_graph():
     )
     graph = CrystalGraphConverter(r_cut=1.0, a_cut=1.0).convert(structure)
     batch = CrystalGraphBatch.from_graphs([graph]).with_geometry()
-    model = GPTFFNet(_cfg(radial_cutoff=1.0, angle_cutoff=1.0))
+    model = GPTFF(_cfg(radial_cutoff=1.0, angle_cutoff=1.0))
 
     energy = model(batch)
 
@@ -96,40 +91,9 @@ def test_interaction_block_handles_no_edge_graph():
     assert torch.isfinite(energy).all()
 
 
-def test_normalize_aggregation_modes_handle_zero_counts():
-    values = torch.ones((3, 2))
-    counts = torch.tensor([0, 1, 4])
-
-    assert torch.equal(normalize_aggregation(values, counts, "sum"), values)
-    assert torch.allclose(
-        normalize_aggregation(values, counts, "mean"),
-        torch.tensor([[1.0, 1.0], [1.0, 1.0], [0.25, 0.25]]),
-    )
-    assert torch.allclose(
-        normalize_aggregation(values, counts, "sqrt"),
-        torch.tensor([[1.0, 1.0], [1.0, 1.0], [0.5, 0.5]]),
-    )
-
-
-def test_edge_counts_per_center_counts_outgoing_edges():
-    edge_index = torch.tensor([[0, 0, 2], [1, 2, 0]])
-    counts = edge_counts_per_center(
-        edge_index,
-        num_atoms=4,
-        reference=torch.zeros((4, 2)),
-    )
-
-    assert torch.equal(counts, torch.tensor([2.0, 0.0, 1.0, 0.0]))
-
-
-def test_invalid_aggregation_norm_is_rejected():
-    with pytest.raises(ValueError, match="aggregation_norm"):
-        _cfg(aggregation_norm="invalid")
-
-
 def test_three_body_edge_delta_is_zero_without_angle_triplets():
     graph = _batch(a_cut=1.0)
-    model = GPTFFNet(_cfg())
+    model = GPTFF(_cfg())
 
     assert graph.triplet_edge_index.numel() == 0
 
@@ -137,6 +101,7 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
     features = _features(model, graph)
     edge_ij = features.edge_fea
     delta = model.interactions[0].three_body(
+        model.interactions[0].triplet_atom_norm(atom_fea),
         edge_ij,
         graph,
         features.triplet_modulation,
@@ -146,28 +111,62 @@ def test_three_body_edge_delta_is_zero_without_angle_triplets():
     assert torch.equal(delta, torch.zeros_like(edge_ij))
 
 
-def test_interaction_block_residual_scale_zero_returns_identity():
+def test_sum_aggregation_adds_values_by_index():
+    values = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    indices = torch.tensor([0, 1, 0])
+    reference = torch.zeros((2, 2))
+
+    aggregated = sum_aggregation(
+        values,
+        indices,
+        dim_size=2,
+        reference=reference,
+    )
+
+    assert torch.equal(
+        aggregated,
+        torch.tensor([[6.0, 8.0], [3.0, 4.0]]),
+    )
+
+
+def test_interaction_block_uses_unscaled_residual_addition():
     graph = _batch()
-    model = GPTFFNet(_cfg(residual_scale=0.0))
+    model = GPTFF(_cfg())
+    block = model.interactions[0]
+    block.pair_atom_norm = nn.Identity()
+    block.triplet_atom_norm = nn.Identity()
+    block.atom_norm = nn.Identity()
+    block.three_body = _ConstantTripletDelta(value=2.0)
+    block.edge_update = _ConstantPairDelta(value=3.0)
+    block.atom_update = _ConstantAtomDelta(value=4.0)
 
-    atom_fea = model.atom_embedding(graph.atom_types)
-    features = _features(model, graph)
-    edge_ij = features.edge_fea
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    features = GeometryFeatures(
+        edge_basis=torch.empty((edge_ij.shape[0], 0)),
+        angle_edge_basis=torch.empty((edge_ij.shape[0], 0)),
+        edge_fea=edge_ij,
+        edge_modulation=EdgeModulation(
+            atom=torch.zeros_like(atom_fea[graph.edge_index[0]]),
+            edge=torch.zeros_like(edge_ij),
+        ),
+        triplet_modulation=torch.zeros_like(edge_ij),
+    )
 
-    atom_out, edge_out = model.interactions[0](
+    atom_out, edge_out = block(
         atom_fea,
         edge_ij,
         graph,
         features,
     )
 
-    assert torch.allclose(atom_out, atom_fea)
-    assert torch.allclose(edge_out, edge_ij)
+    assert torch.equal(edge_out, torch.full_like(edge_ij, 5.0))
+    assert torch.equal(atom_out, torch.full_like(atom_fea, 4.0))
 
 
 def test_zero_geometry_modulation_zeroes_interaction_deltas():
     graph = _batch()
-    model = GPTFFNet(_cfg())
+    model = GPTFF(_cfg())
     block = model.interactions[0]
 
     atom_fea = model.atom_embedding(graph.atom_types)
@@ -180,6 +179,7 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
     zero_triplet_modulation = torch.zeros_like(edge_ij)
 
     triplet_delta = block.three_body(
+        block.triplet_atom_norm(atom_fea),
         edge_ij,
         graph,
         zero_triplet_modulation,
@@ -202,43 +202,117 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
     assert torch.equal(atom_delta, torch.zeros_like(atom_delta))
 
 
-def test_residual_deltas_are_zero_initialized_by_default():
+def test_atom_update_uses_sum_aggregation():
     graph = _batch()
-    model = GPTFFNet(_cfg())
+    model = GPTFF(_cfg())
     block = model.interactions[0]
-
-    atom_fea = model.atom_embedding(graph.atom_types)
-    features = _features(model, graph)
-    edge_ij = features.edge_fea
-
-    pair_delta = block.edge_update(
-        block.pair_atom_norm(atom_fea),
-        edge_ij,
-        graph,
-        features.edge_modulation.edge,
+    block.atom_update.message_encoder = _ConstantFeature(
+        output_dim=2 * model.atom_fea_len,
+        value=1.0,
     )
-    triplet_delta = block.three_body(
-        edge_ij,
-        graph,
-        features.triplet_modulation,
+    block.atom_update.message_gate = _ConstantFeature(
+        output_dim=model.atom_fea_len,
+        value=1.0,
     )
+
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
     atom_delta = block.atom_update(
-        block.atom_norm(atom_fea),
+        atom_fea,
         edge_ij,
-        features.edge_modulation.atom,
+        torch.ones_like(atom_fea[graph.edge_index[0]]),
         graph,
     )
+    expected = torch.zeros_like(atom_fea)
+    expected.index_add_(0, graph.edge_index[0], torch.ones_like(atom_fea[graph.edge_index[0]]))
 
-    assert torch.equal(pair_delta, torch.zeros_like(pair_delta))
-    assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
-    assert torch.equal(atom_delta, torch.zeros_like(atom_delta))
+    assert torch.equal(atom_delta, expected)
 
 
-def test_interaction_block_updates_pair_then_triplet_then_atom():
+def test_three_body_update_uses_sum_aggregation():
     graph = _batch()
-    model = GPTFFNet(_cfg())
+    model = GPTFF(_cfg())
+    block = model.interactions[0]
+    block.three_body.target_encoder = _ConstantFeature(
+        output_dim=model.nbr_fea_len,
+        value=1.0,
+    )
+    block.three_body.source_encoder = _ConstantFeature(
+        output_dim=model.nbr_fea_len,
+        value=1.0,
+    )
+    block.three_body.output_gate = nn.Identity()
+
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_fea_len))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.nbr_fea_len))
+    triplet_delta = block.three_body(
+        atom_fea,
+        edge_ij,
+        graph,
+        torch.ones_like(edge_ij),
+    )
+    expected = torch.zeros_like(edge_ij)
+    expected.index_add_(
+        0,
+        graph.triplet_edge_index[0],
+        torch.ones_like(edge_ij[graph.triplet_edge_index[0]]),
+    )
+
+    assert torch.equal(triplet_delta, expected)
+
+
+def test_three_body_update_factorizes_target_and_source_features():
+    graph = _batch()
+    model = GPTFF(_cfg())
+    block = model.interactions[0]
+    target_encoder = _RecordingConstantFeature(
+        output_dim=model.nbr_fea_len,
+        value=1.0,
+    )
+    source_encoder = _RecordingConstantFeature(
+        output_dim=model.nbr_fea_len,
+        value=1.0,
+    )
+    block.three_body.target_encoder = target_encoder
+    block.three_body.source_encoder = source_encoder
+    block.three_body.output_gate = nn.Identity()
+
+    atom_fea = torch.arange(
+        graph.atom_types.shape[0] * model.atom_fea_len,
+        dtype=torch.float32,
+    ).reshape(graph.atom_types.shape[0], model.atom_fea_len)
+    edge_ij = torch.arange(
+        graph.edge_index.shape[1] * model.nbr_fea_len,
+        dtype=torch.float32,
+    ).reshape(graph.edge_index.shape[1], model.nbr_fea_len)
+    triplet_modulation = torch.ones_like(edge_ij)
+
+    block.three_body(atom_fea, edge_ij, graph, triplet_modulation)
+
+    edge_ij_indices = graph.triplet_edge_index[0]
+    edge_ik_indices = graph.triplet_edge_index[1]
+    expected_target_input = torch.cat([
+        atom_fea[graph.edge_index[0]],
+        atom_fea[graph.edge_index[1]],
+        edge_ij,
+    ], dim=-1)
+    expected_source_input = torch.cat([
+        atom_fea[graph.edge_index[1][edge_ik_indices]],
+        edge_ij[edge_ik_indices],
+        block.three_body.angle_basis(graph.triplet_cosine),
+    ], dim=-1)
+
+    assert torch.equal(target_encoder.seen_input, expected_target_input)
+    assert torch.equal(source_encoder.seen_input, expected_source_input)
+    assert edge_ij_indices.numel() == source_encoder.seen_input.shape[0]
+
+
+def test_interaction_block_updates_triplet_then_pair_then_atom():
+    graph = _batch()
+    model = GPTFF(_cfg())
     block = model.interactions[0]
     block.pair_atom_norm = nn.Identity()
+    block.triplet_atom_norm = nn.Identity()
     block.atom_norm = nn.Identity()
     block.edge_update = _ConstantPairDelta(value=1.0)
     block.three_body = _ConstantTripletDelta(value=2.0)
@@ -266,7 +340,8 @@ def test_interaction_block_updates_pair_then_triplet_then_atom():
         features,
     )
 
-    assert torch.equal(block.three_body.seen_edge, torch.ones_like(edge_ij))
+    assert torch.equal(block.three_body.seen_edge, torch.zeros_like(edge_ij))
+    assert torch.equal(block.edge_update.seen_edge, torch.full_like(edge_ij, 2.0))
     assert torch.equal(block.atom_update.seen_edge, torch.full_like(edge_ij, 3.0))
     assert torch.equal(edge_out, torch.full_like(edge_ij, 3.0))
     assert torch.equal(atom_out, atom_fea)
@@ -276,8 +351,10 @@ class _ConstantPairDelta(nn.Module):
     def __init__(self, value):
         super().__init__()
         self.value = float(value)
+        self.seen_edge = None
 
     def forward(self, atom_fea, edge_ij, graph, edge_modulation):
+        self.seen_edge = edge_ij.detach().clone()
         return torch.full_like(edge_ij, self.value)
 
 
@@ -287,7 +364,7 @@ class _ConstantTripletDelta(nn.Module):
         self.value = float(value)
         self.seen_edge = None
 
-    def forward(self, edge_ij, graph, triplet_modulation):
+    def forward(self, atom_fea, edge_ij, graph, triplet_modulation):
         self.seen_edge = edge_ij.detach().clone()
         return torch.full_like(edge_ij, self.value)
 
@@ -300,3 +377,32 @@ class _RecordingAtomDelta(nn.Module):
     def forward(self, atom_fea, edge_ij, edge_modulation, graph):
         self.seen_edge = edge_ij.detach().clone()
         return torch.zeros_like(atom_fea)
+
+
+class _ConstantAtomDelta(nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = float(value)
+
+    def forward(self, atom_fea, edge_ij, edge_modulation, graph):
+        return torch.full_like(atom_fea, self.value)
+
+
+class _ConstantFeature(nn.Module):
+    def __init__(self, output_dim, value):
+        super().__init__()
+        self.output_dim = int(output_dim)
+        self.value = float(value)
+
+    def forward(self, x):
+        return x.new_full((x.shape[0], self.output_dim), self.value)
+
+
+class _RecordingConstantFeature(_ConstantFeature):
+    def __init__(self, output_dim, value):
+        super().__init__(output_dim, value)
+        self.seen_input = None
+
+    def forward(self, x):
+        self.seen_input = x.detach().clone()
+        return super().forward(x)

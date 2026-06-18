@@ -82,7 +82,7 @@ def save_checkpoint(
         "cfg": config.checkpoint_dict(),
         "training_config": config.checkpoint_dict(),
         "label_config": asdict(config.to_label_config()),
-        "model_name": "tModLodaer_t" if config.transformer_activate else "GPTFFNet",
+        "model_name": "tModLodaer_t" if config.transformer_activate else "GPTFF",
         "model_config": config.to_model_config().to_dict(),
     }
     if scheduler is not None:

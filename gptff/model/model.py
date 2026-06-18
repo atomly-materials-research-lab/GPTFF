@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from gptff.model.basis import FourierAngleBasis, RadialBesselBasis
-from gptff.model.config import GPTFFNetConfig
+from gptff.model.config import GPTFFConfig
 from gptff.model.encoders import (
     AtomEmbedding,
     GeometryEmbedding,
@@ -168,7 +168,6 @@ class tModLodaer_t(nn.Module):
         max_atomic_number = getattr(CFG, "max_atomic_number", 94)
         element_refs = getattr(CFG, "element_refs", None)
         n_readout_layers = getattr(CFG, "n_readout_layers", 3)
-        readout_zero_init = getattr(CFG, "readout_zero_init", True)
 
         self.device = CFG.device
 
@@ -210,7 +209,6 @@ class tModLodaer_t(nn.Module):
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
             n_readout_layers=n_readout_layers,
-            readout_zero_init=readout_zero_init,
         )
 
     def forward(self, graph):
@@ -261,8 +259,8 @@ class tModLodaer_t(nn.Module):
         return self.readout(atom_fea, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
 
 
-class GPTFFNet(nn.Module):
-    def __init__(self, config: GPTFFNetConfig):
+class GPTFF(nn.Module):
+    def __init__(self, config: GPTFFConfig):
         super().__init__()
 
         atom_fea_len = config.node_feature_len
@@ -304,9 +302,6 @@ class GPTFFNet(nn.Module):
                 nbr_fea_len=nbr_fea_len,
                 num_angular=num_angular,
                 dropout=config.interaction_dropout,
-                residual_scale=config.residual_scale,
-                residual_zero_init=config.residual_zero_init,
-                aggregation_norm=config.aggregation_norm,
             )
             for _ in range(n_layers)
         ])
@@ -316,7 +311,6 @@ class GPTFFNet(nn.Module):
             max_atomic_number=max_atomic_number,
             element_refs=element_refs,
             n_readout_layers=config.n_readout_layers,
-            readout_zero_init=config.readout_zero_init,
         )
 
     def _validate_graph_cutoffs(self, graph) -> None:

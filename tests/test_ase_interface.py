@@ -3,12 +3,12 @@ import torch
 from ase import Atoms
 
 from gptff.interfaces import ASECalculator
-from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.model import GPTFF, GPTFFConfig
 from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -18,7 +18,7 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
         angle_cutoff=3.0,
         cutoff_coeff=5,
     )
-    model = GPTFFNet(cfg)
+    model = GPTFF(cfg)
     checkpoint_path = tmp_path / "checkpoint.pth"
     torch.save(
         {
@@ -34,7 +34,7 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
                 "transformer_activate": False,
                 "unit_trans": EV_PER_ANG3_TO_GPA,
             },
-            "model_name": "GPTFFNet",
+            "model_name": "GPTFF",
             "model_config": cfg.to_dict(),
         },
         checkpoint_path,

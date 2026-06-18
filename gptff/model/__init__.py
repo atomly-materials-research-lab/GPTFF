@@ -1,4 +1,4 @@
-from gptff.model.config import GPTFFNetConfig
-from gptff.model.model import GPTFFNet, tModLodaer_t
+from gptff.model.config import GPTFFConfig
+from gptff.model.model import GPTFF, tModLodaer_t
 
-__all__ = ["GPTFFNet", "GPTFFNetConfig", "tModLodaer_t"]
+__all__ = ["GPTFF", "GPTFFConfig", "tModLodaer_t"]

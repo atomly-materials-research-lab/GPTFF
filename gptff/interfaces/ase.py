@@ -6,8 +6,8 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model.config import GPTFFNetConfig
-from gptff.model.model import GPTFFNet, tModLodaer_t
+from gptff.model.config import GPTFFConfig
+from gptff.model.model import GPTFF, tModLodaer_t
 from gptff.inference import predict_energy_forces_stress
 from gptff.utils.labels import stress_gpa_to_ase_voigt
 
@@ -26,14 +26,15 @@ class ASECalculator(Calculator):
         if training_config["transformer_activate"]:
             cfg = SimpleNamespace(**training_config)
             cfg.device = device
-            self.model_config = GPTFFNetConfig.from_dict(training_config)
+            self.model_config = GPTFFConfig.from_dict(training_config)
             self.model = tModLodaer_t(cfg)
         else:
-            self.model_config = GPTFFNetConfig.from_dict(self.state["model_config"])
-            self.model = GPTFFNet(self.model_config)
+            self.model_config = GPTFFConfig.from_dict(self.state["model_config"])
+            self.model = GPTFF(self.model_config)
         self.device = device
         self.model.load_state_dict(self.state["state_dict"])
         self.model = self.model.to(device)
+        self.model.eval()
         self.graph_converter = CrystalGraphConverter(
             r_cut=self.model_config.radial_cutoff,
             a_cut=self.model_config.angle_cutoff,

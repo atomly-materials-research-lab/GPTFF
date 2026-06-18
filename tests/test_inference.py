@@ -7,7 +7,7 @@ from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.inference import predict_energy_forces_stress
-from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.model import GPTFF, GPTFFConfig
 
 
 def test_prediction_returns_zero_unused_geometry_gradients():
@@ -19,8 +19,8 @@ def test_prediction_returns_zero_unused_geometry_gradients():
     )
     graph = CrystalGraphConverter(r_cut=1.0, a_cut=1.0).convert(structure)
     batch = CrystalGraphBatch.from_graphs([graph])
-    model = GPTFFNet(
-        GPTFFNetConfig(
+    model = GPTFF(
+        GPTFFConfig(
             node_feature_len=8,
             edge_feature_len=8,
             n_layers=1,

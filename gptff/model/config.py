@@ -3,11 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
-from gptff.model.layers import validate_aggregation_norm
-
 
 @dataclass(frozen=True)
-class GPTFFNetConfig:
+class GPTFFConfig:
     node_feature_len: int
     edge_feature_len: int
     n_layers: int
@@ -19,12 +17,8 @@ class GPTFFNetConfig:
     max_atomic_number: int = 94
     element_refs: Any = None
     n_readout_layers: int = 3
-    readout_zero_init: bool = True
     final_atom_norm: bool = True
     interaction_dropout: float = 0.0
-    residual_scale: float = 1.0
-    residual_zero_init: bool = True
-    aggregation_norm: str = "sqrt"
 
     def __post_init__(self) -> None:
         if self.node_feature_len <= 0:
@@ -49,16 +43,9 @@ class GPTFFNetConfig:
             raise ValueError("n_readout_layers must be positive.")
         if self.interaction_dropout < 0 or self.interaction_dropout >= 1:
             raise ValueError("interaction_dropout must be in the range [0, 1).")
-        if self.residual_scale < 0:
-            raise ValueError("residual_scale must be non-negative.")
-        object.__setattr__(
-            self,
-            "aggregation_norm",
-            validate_aggregation_norm(self.aggregation_norm),
-        )
 
     @classmethod
-    def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFNetConfig":
+    def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFConfig":
         return cls(
             node_feature_len=int(raw_config["node_feature_len"]),
             edge_feature_len=int(raw_config["edge_feature_len"]),
@@ -71,12 +58,8 @@ class GPTFFNetConfig:
             max_atomic_number=int(raw_config.get("max_atomic_number", 94)),
             element_refs=raw_config.get("element_refs", None),
             n_readout_layers=int(raw_config.get("n_readout_layers", 3)),
-            readout_zero_init=bool(raw_config.get("readout_zero_init", True)),
             final_atom_norm=bool(raw_config.get("final_atom_norm", True)),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
-            residual_scale=float(raw_config.get("residual_scale", 1.0)),
-            residual_zero_init=bool(raw_config.get("residual_zero_init", True)),
-            aggregation_norm=str(raw_config.get("aggregation_norm", "sqrt")),
         )
 
     def to_dict(self) -> dict[str, Any]:

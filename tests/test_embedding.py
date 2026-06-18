@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.model import GPTFF, GPTFFConfig
 from gptff.model.encoders import (
     AtomEmbedding,
     EdgeEmbedding,
@@ -80,7 +80,7 @@ def test_triplet_modulation_projection_preserves_zero_basis():
 
 
 def test_triplet_modulation_uses_angle_cutoff_independently():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -91,7 +91,7 @@ def test_triplet_modulation_uses_angle_cutoff_independently():
         cutoff_coeff=5,
         max_atomic_number=94,
     )
-    model = GPTFFNet(cfg)
+    model = GPTFF(cfg)
     distances = torch.tensor([2.5])
 
     edge_basis = model.geometry_embedding.edge_rbf(distances)
@@ -104,7 +104,7 @@ def test_triplet_modulation_uses_angle_cutoff_independently():
 
 
 def test_non_transformer_model_uses_embedding_modules():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -116,7 +116,7 @@ def test_non_transformer_model_uses_embedding_modules():
         max_atomic_number=94,
     )
 
-    model = GPTFFNet(cfg)
+    model = GPTFF(cfg)
 
     assert isinstance(model.atom_embedding, AtomEmbedding)
     assert isinstance(model.geometry_embedding, GeometryEmbedding)
@@ -135,7 +135,7 @@ def test_non_transformer_model_uses_embedding_modules():
 
 
 def test_non_transformer_model_can_disable_final_atom_norm():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -148,6 +148,6 @@ def test_non_transformer_model_can_disable_final_atom_norm():
         final_atom_norm=False,
     )
 
-    model = GPTFFNet(cfg)
+    model = GPTFF(cfg)
 
     assert isinstance(model.final_atom_norm, nn.Identity)

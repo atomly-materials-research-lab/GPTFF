@@ -5,7 +5,6 @@ import pytest
 from gptff.graph import CrystalGraph, GraphSample
 from gptff.model.readout import (
     EnergyHead,
-    EnergyReadoutOutput,
     available_element_ref_presets,
     build_element_ref_tensor,
     fit_element_refs_from_samples,
@@ -13,7 +12,7 @@ from gptff.model.readout import (
 
 
 def test_energy_head_is_extensive_for_learned_site_energy():
-    head = EnergyHead(atom_fea_len=4, readout_zero_init=False)
+    head = EnergyHead(atom_fea_len=4)
     atom_fea = torch.randn(3, 4)
     atom_types = torch.tensor([1, 1, 1], dtype=torch.long)
     atom_batch = torch.tensor([0, 0, 0], dtype=torch.long)
@@ -35,41 +34,8 @@ def test_energy_head_respects_readout_depth():
     assert head.output_layer.out_features == 1
 
 
-def test_energy_head_zero_init_outputs_zero_residual_without_refs():
-    head = EnergyHead(atom_fea_len=4, readout_zero_init=True)
-    atom_fea = torch.randn(3, 4)
-    atom_types = torch.tensor([1, 2, 3], dtype=torch.long)
-    atom_batch = torch.tensor([0, 0, 1], dtype=torch.long)
-
-    energy = head(atom_fea, atom_types, atom_batch, num_graphs=2)
-    output = head.forward_with_site_energies(atom_fea, atom_types, atom_batch, num_graphs=2)
-
-    assert torch.allclose(energy, torch.zeros(2, 1))
-    assert isinstance(output, EnergyReadoutOutput)
-    assert torch.equal(output.energy, energy)
-    assert torch.equal(output.residual_site_energy, torch.zeros_like(output.residual_site_energy))
-    assert torch.equal(output.reference_site_energy, torch.zeros_like(output.reference_site_energy))
-    assert torch.equal(output.site_energy, torch.zeros_like(output.site_energy))
-
-
-def test_energy_head_zero_init_outputs_element_reference_baseline():
-    head = EnergyHead(
-        atom_fea_len=4,
-        max_atomic_number=3,
-        element_refs={"1": -1.5, "3": 2.0},
-        readout_zero_init=True,
-    )
-    atom_fea = torch.randn(3, 4)
-    atom_types = torch.tensor([1, 3, 1], dtype=torch.long)
-    atom_batch = torch.tensor([0, 0, 1], dtype=torch.long)
-
-    energy = head(atom_fea, atom_types, atom_batch, num_graphs=2)
-
-    assert torch.allclose(energy.squeeze(-1), torch.tensor([0.5, -1.5]))
-
-
-def test_energy_head_can_keep_random_output_initialization():
-    head = EnergyHead(atom_fea_len=4, readout_zero_init=False)
+def test_energy_head_uses_default_output_initialization():
+    head = EnergyHead(atom_fea_len=4)
 
     assert not torch.equal(
         head.output_layer.weight,
@@ -100,7 +66,6 @@ def test_energy_head_exposes_site_energy_decomposition():
         atom_fea_len=4,
         max_atomic_number=3,
         element_refs={"1": -1.5, "3": 2.0},
-        readout_zero_init=False,
     )
     for param in head.parameters():
         torch.nn.init.zeros_(param)

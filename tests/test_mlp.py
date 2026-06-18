@@ -4,14 +4,14 @@ import torch
 from gptff.model.layers import GatedMLP, MLP
 
 
-def test_mlp_returns_expected_shape_and_zero_init_output():
-    mlp = MLP(4, 2, hidden_dims=(8, 8), zero_init_output=True)
+def test_mlp_returns_expected_shape_and_finite_output():
+    mlp = MLP(4, 2, hidden_dims=(8, 8))
     x = torch.randn(3, 4)
 
     y = mlp(x)
 
     assert y.shape == (3, 2)
-    assert torch.allclose(y, torch.zeros_like(y))
+    assert torch.isfinite(y).all()
 
 
 def test_gated_mlp_returns_finite_features():
@@ -24,14 +24,13 @@ def test_gated_mlp_returns_finite_features():
     assert torch.isfinite(y).all()
 
 
-def test_gated_mlp_zero_init_output():
-    mlp = GatedMLP(4, 6, zero_init_output=True)
-    x = torch.randn(3, 4)
+def test_bias_free_gated_mlp_maps_zero_input_to_zero():
+    mlp = GatedMLP(4, 6, bias=False)
+    x = torch.zeros(3, 4)
 
     y = mlp(x)
 
-    assert y.shape == (3, 6)
-    assert torch.allclose(y, torch.zeros_like(y))
+    assert torch.equal(y, torch.zeros_like(y))
 
 
 def test_mlp_rejects_invalid_dropout():

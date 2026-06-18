@@ -8,7 +8,7 @@ from pymatgen.core import Lattice, Structure
 
 from gptff.data import apply_fitted_element_refs, build_datasets
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.model import GPTFFNetConfig
+from gptff.model import GPTFFConfig
 from gptff.trainer.trainer import (
     TrainingConfig,
     compute_batch_loss,
@@ -32,12 +32,8 @@ def test_trainer_config_parses_legacy_json_keys_without_side_effects():
     assert config.graph_cache_size == 16
     assert config.element_refs == "atomly"
     assert config.n_readout_layers == 4
-    assert config.readout_zero_init is True
     assert config.final_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
-    assert config.residual_scale == pytest.approx(0.5)
-    assert config.residual_zero_init is True
-    assert config.aggregation_norm == "sqrt"
     assert config.checkpoint_path is None
     assert config.checkpoint_dict()["data_file"] == "data.csv"
 
@@ -90,17 +86,15 @@ def test_training_config_builds_model_config_only_from_model_fields():
 
     model_config = config.to_model_config()
 
-    assert isinstance(model_config, GPTFFNetConfig)
+    assert isinstance(model_config, GPTFFConfig)
     assert model_config.n_readout_layers == 4
-    assert model_config.readout_zero_init is True
     assert model_config.final_atom_norm is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
-    assert model_config.residual_scale == pytest.approx(0.5)
-    assert model_config.residual_zero_init is True
-    assert model_config.aggregation_norm == "sqrt"
     assert model_config.element_refs == "atomly"
     assert "batch_size" not in model_config.to_dict()
     assert "device" not in model_config.to_dict()
+    assert "readout_zero_init" not in model_config.to_dict()
+    assert "residual_zero_init" not in model_config.to_dict()
 
 
 def test_apply_fitted_element_refs_updates_checkpoint_config():
@@ -146,14 +140,12 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
 
     state = torch.load(tmp_path / "curr_checkpoint.pth", map_location="cpu")
 
-    assert state["model_name"] == "GPTFFNet"
+    assert state["model_name"] == "GPTFF"
     assert state["model_config"]["n_readout_layers"] == 4
-    assert state["model_config"]["readout_zero_init"] is True
     assert state["model_config"]["final_atom_norm"] is True
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
-    assert state["model_config"]["residual_scale"] == pytest.approx(0.5)
-    assert state["model_config"]["residual_zero_init"] is True
-    assert state["model_config"]["aggregation_norm"] == "sqrt"
+    assert "readout_zero_init" not in state["model_config"]
+    assert "residual_zero_init" not in state["model_config"]
     assert state["training_config"]["batch_size"] == 4
     assert state["training_config"]["cache_graphs"] is True
     assert state["training_config"]["graph_cache_size"] == 16
@@ -215,7 +207,6 @@ def test_load_training_checkpoint_restores_model_and_optimizer(tmp_path):
     assert checkpoint.training_config["graph_cache_size"] == 16
     assert checkpoint.model_config["n_readout_layers"] == 4
     assert checkpoint.label_config["stress_unit"] == "kbar"
-    assert checkpoint.model_config["aggregation_norm"] == "sqrt"
     assert torch.allclose(restored_model.weight, expected_weight)
     assert restored_optimizer.state_dict()["state"]
 
@@ -372,12 +363,8 @@ def _raw_config():
             "fit_element_refs": False,
             "element_ref_ridge": 0.0,
             "n_readout_layers": 4,
-            "readout_zero_init": True,
             "final_atom_norm": True,
             "interaction_dropout": 0.1,
-            "residual_scale": 0.5,
-            "residual_zero_init": True,
-            "aggregation_norm": "sqrt",
             "n_layers": 1,
             "warmup_steps": 0,
             "device": "cpu",

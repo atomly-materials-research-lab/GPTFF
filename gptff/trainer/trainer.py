@@ -18,7 +18,7 @@ from gptff.data import (
     build_datasets,
     build_loaders,
 )
-from gptff.model import GPTFFNet, tModLodaer_t
+from gptff.model import GPTFF, tModLodaer_t
 from gptff.trainer.checkpoint import (
     LoadedCheckpoint,
     load_training_checkpoint,
@@ -115,7 +115,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
-    model = tModLodaer_t(config) if config.transformer_activate else GPTFFNet(config.to_model_config())
+    model = tModLodaer_t(config) if config.transformer_activate else GPTFF(config.to_model_config())
     return model.to(config.device)
 
 

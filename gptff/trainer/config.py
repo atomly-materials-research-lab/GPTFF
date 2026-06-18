@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from gptff.model import GPTFFNetConfig
+from gptff.model import GPTFFConfig
 from gptff.utils.labels import LabelConfig
 
 
@@ -46,12 +46,8 @@ class TrainingConfig:
     fit_element_refs: bool = False
     element_ref_ridge: float = 0.0
     n_readout_layers: int = 3
-    readout_zero_init: bool = True
     final_atom_norm: bool = True
     interaction_dropout: float = 0.0
-    residual_scale: float = 1.0
-    residual_zero_init: bool = True
-    aggregation_norm: str = "sqrt"
     unit_trans: float = 160.21766208
     output_dir: str = "."
     min_lr: float = 5e-6
@@ -101,12 +97,8 @@ class TrainingConfig:
             fit_element_refs=bool(training.get("fit_element_refs", False)),
             element_ref_ridge=float(training.get("element_ref_ridge", 0.0)),
             n_readout_layers=int(training.get("n_readout_layers", 3)),
-            readout_zero_init=bool(training.get("readout_zero_init", True)),
             final_atom_norm=bool(training.get("final_atom_norm", True)),
             interaction_dropout=float(training.get("interaction_dropout", 0.0)),
-            residual_scale=float(training.get("residual_scale", 1.0)),
-            residual_zero_init=bool(training.get("residual_zero_init", True)),
-            aggregation_norm=str(training.get("aggregation_norm", "sqrt")),
             unit_trans=float(training.get("unit_trans", 160.21766208)),
             output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
             min_lr=float(training.get("min_lr", 5e-6)),
@@ -127,8 +119,8 @@ class TrainingConfig:
             stress_sign=self.stress_sign,
         )
 
-    def to_model_config(self) -> GPTFFNetConfig:
-        return GPTFFNetConfig(
+    def to_model_config(self) -> GPTFFConfig:
+        return GPTFFConfig(
             node_feature_len=self.node_feature_len,
             edge_feature_len=self.edge_feature_len,
             n_layers=self.n_layers,
@@ -140,12 +132,8 @@ class TrainingConfig:
             max_atomic_number=self.max_atomic_number,
             element_refs=self.element_refs,
             n_readout_layers=self.n_readout_layers,
-            readout_zero_init=self.readout_zero_init,
             final_atom_norm=self.final_atom_norm,
             interaction_dropout=self.interaction_dropout,
-            residual_scale=self.residual_scale,
-            residual_zero_init=self.residual_zero_init,
-            aggregation_norm=self.aggregation_norm,
         )
 
 

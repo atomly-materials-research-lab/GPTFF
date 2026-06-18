@@ -284,12 +284,10 @@ class EnergyHead(nn.Module):
         max_atomic_number=94,
         element_refs=None,
         n_readout_layers=3,
-        readout_zero_init=True,
     ):
         super().__init__()
         self.max_atomic_number = int(max_atomic_number)
         self.n_readout_layers = int(n_readout_layers)
-        self.readout_zero_init = bool(readout_zero_init)
         if self.n_readout_layers <= 0:
             raise ValueError("n_readout_layers must be positive.")
 
@@ -301,9 +299,6 @@ class EnergyHead(nn.Module):
             ])
         self.hidden_mlp = nn.Sequential(*hidden_layers)
         self.output_layer = nn.Linear(atom_fea_len, 1)
-        if self.readout_zero_init:
-            nn.init.zeros_(self.output_layer.weight)
-            nn.init.zeros_(self.output_layer.bias)
         self.register_buffer(
             "element_refs",
             build_element_ref_tensor(

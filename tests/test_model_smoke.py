@@ -4,11 +4,11 @@ from pymatgen.core import Lattice, Structure
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.inference import predict_energy_forces_stress
-from gptff.model import GPTFFNet, GPTFFNetConfig
+from gptff.model import GPTFF, GPTFFConfig
 
 
 def test_model_forward_and_efs_with_smooth_radial_basis():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -27,7 +27,7 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
     batch = CrystalGraphBatch.from_graphs([graph])
 
     energy, forces, stress = predict_energy_forces_stress(
-        GPTFFNet(cfg),
+        GPTFF(cfg),
         batch,
         create_graph=True,
         compute_stress=True,
@@ -42,7 +42,7 @@ def test_model_forward_and_efs_with_smooth_radial_basis():
 
 
 def test_model_rejects_radial_cutoff_mismatch():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -60,11 +60,11 @@ def test_model_rejects_radial_cutoff_mismatch():
     batch = CrystalGraphBatch.from_graphs([graph]).with_geometry()
 
     with pytest.raises(ValueError, match="Graph radial_cutoff 2.9"):
-        GPTFFNet(cfg)(batch)
+        GPTFF(cfg)(batch)
 
 
 def test_model_rejects_angle_cutoff_mismatch():
-    cfg = GPTFFNetConfig(
+    cfg = GPTFFConfig(
         node_feature_len=8,
         edge_feature_len=8,
         n_layers=1,
@@ -82,7 +82,7 @@ def test_model_rejects_angle_cutoff_mismatch():
     batch = CrystalGraphBatch.from_graphs([graph]).with_geometry()
 
     with pytest.raises(ValueError, match="Graph angle_cutoff 2.5"):
-        GPTFFNet(cfg)(batch)
+        GPTFF(cfg)(batch)
 
 
 def test_prediction_uses_model_total_energy():
