@@ -6,6 +6,7 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
+import gptff.trainer.trainer as trainer_module
 from gptff.data import (
     AtomicDataset,
     AtomicSample,
@@ -304,7 +305,7 @@ def test_apply_fitted_element_refs_updates_checkpoint_config():
     assert config.checkpoint_dict()["element_references"]["source"] == "fit"
 
 
-def test_trainer_fit_writes_history_and_checkpoints(tmp_path):
+def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypatch):
     raw_config = _raw_config()
     raw_config["training"]["output_dir"] = str(tmp_path)
     raw_config["training"]["epochs"] = 1
@@ -312,6 +313,23 @@ def test_trainer_fit_writes_history_and_checkpoints(tmp_path):
     raw_config["data"]["cache_graphs"] = False
     raw_config["data"]["graph_cache_size"] = None
     config = TrainingConfig.from_dict(raw_config)
+    progress_descriptions = []
+
+    class Progress:
+        def __init__(self, iterable):
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+        def set_postfix(self, **_kwargs):
+            return None
+
+    def fake_tqdm(iterable, *, desc, **_kwargs):
+        progress_descriptions.append(desc)
+        return Progress(iterable)
+
+    monkeypatch.setattr(trainer_module, "tqdm", fake_tqdm)
 
     best_metric = Trainer(config).fit(_atomic_dataset())
 
@@ -330,6 +348,7 @@ def test_trainer_fit_writes_history_and_checkpoints(tmp_path):
     ).issubset(history.columns)
     assert (tmp_path / "last.pt").exists()
     assert (tmp_path / "best.pt").exists()
+    assert progress_descriptions == ["Train 1/1", "Validation 1/1"]
 
 
 def test_csv_logger_appends_epoch_records(tmp_path):

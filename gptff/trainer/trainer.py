@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
+from tqdm.auto import tqdm
 
 from gptff.data import (
     AtomicDataset,
@@ -162,12 +163,21 @@ def train_one_epoch(
     scheduler: Scheduler | None,
     scaler: GradScaler,
     config: TrainingConfig,
+    *,
+    progress_description: str = "Train",
 ) -> EpochMetrics:
     model.train()
     metrics = EpochMetrics.create()
     scheduler_batches = scheduler_step_batches(len(train_loader))
 
-    for batch_idx, batch in enumerate(train_loader, start=1):
+    progress = tqdm(
+        train_loader,
+        desc=progress_description,
+        unit="batch",
+        dynamic_ncols=True,
+        leave=False,
+    )
+    for batch_idx, batch in enumerate(progress, start=1):
         batch = batch.to(config.device)
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
@@ -181,6 +191,7 @@ def train_one_epoch(
 
         if has_nonfinite_loss(batch_loss):
             metrics.skipped_batches += 1
+            progress.set_postfix(skipped=metrics.skipped_batches, refresh=False)
             continue
 
         optimizer.zero_grad(set_to_none=True)
@@ -193,6 +204,7 @@ def train_one_epoch(
             scheduler.step()
 
         update_metrics(metrics, batch_loss)
+        progress.set_postfix(loss=f"{metrics.loss.avg:.5f}", refresh=False)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -204,11 +216,20 @@ def validate(
     model: torch.nn.Module,
     criterion: nn.Module,
     config: TrainingConfig,
+    *,
+    progress_description: str = "Validation",
 ) -> EpochMetrics:
     model.eval()
     metrics = EpochMetrics.create()
 
-    for batch in val_loader:
+    progress = tqdm(
+        val_loader,
+        desc=progress_description,
+        unit="batch",
+        dynamic_ncols=True,
+        leave=False,
+    )
+    for batch in progress:
         batch = batch.to(config.device)
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
@@ -222,9 +243,11 @@ def validate(
 
         if has_nonfinite_loss(batch_loss):
             metrics.skipped_batches += 1
+            progress.set_postfix(skipped=metrics.skipped_batches, refresh=False)
             continue
 
         update_metrics(metrics, batch_loss)
+        progress.set_postfix(loss=f"{metrics.loss.avg:.5f}", refresh=False)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -311,7 +334,7 @@ class Trainer:
         self.scheduler = build_scheduler(self.optimizer, self.config)
         self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
 
-    def train_epoch(self) -> EpochMetrics:
+    def train_epoch(self, epoch: int) -> EpochMetrics:
         return train_one_epoch(
             self.train_loader,
             self.model,
@@ -320,14 +343,16 @@ class Trainer:
             self.scheduler,
             self.scaler,
             self.config,
+            progress_description=f"Train {epoch}/{self.config.epochs}",
         )
 
-    def validate(self) -> EpochMetrics:
+    def validate(self, epoch: int) -> EpochMetrics:
         return validate(
             self.val_loader,
             self.model,
             self.criterion,
             self.config,
+            progress_description=f"Validation {epoch}/{self.config.epochs}",
         )
 
     def fit(self, dataset: AtomicDataset | None = None) -> float:
@@ -336,14 +361,18 @@ class Trainer:
         try:
             for epoch in range(self.config.epochs):
                 lr = optimizer_lr(self.optimizer)
-                print(f"Epoch: [{epoch + 1}/ {self.config.epochs}], lr: {lr:.4e}")
+                current_epoch = epoch + 1
+                print(
+                    f"Epoch: [{current_epoch}/{self.config.epochs}], lr: {lr:.4e}",
+                    flush=True,
+                )
 
-                train_metrics = self.train_epoch()
-                val_metrics = self.validate()
+                train_metrics = self.train_epoch(current_epoch)
+                val_metrics = self.validate(current_epoch)
 
                 self.logger.log_epoch(
                     build_epoch_log_record(
-                        epoch=epoch + 1,
+                        epoch=current_epoch,
                         lr=lr,
                         train_metrics=train_metrics,
                         val_metrics=val_metrics,
@@ -357,7 +386,7 @@ class Trainer:
                     self.output_dir,
                     self.model,
                     self.config,
-                    epoch=epoch + 1,
+                    epoch=current_epoch,
                     best_validation_metric=self.best_validation_metric,
                     is_best=is_best,
                 )
