@@ -370,6 +370,9 @@ def test_console_logger_prints_epoch_summary(capsys):
 
     output = capsys.readouterr().out
     assert "Epoch 3:" in output
+    assert "train_MAE(e)=0.10000" in output
+    assert "train_MAE(f)=0.20000" in output
+    assert "train_MAE(s)=0.300" in output
     assert "val_MAE(f)=0.40000" in output
 
 
