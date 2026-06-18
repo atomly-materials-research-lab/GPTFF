@@ -366,16 +366,22 @@ def test_three_body_update_factorizes_target_and_source_features():
 
     edge_ij_indices = graph.triplet_edge_index[0]
     edge_ik_indices = graph.triplet_edge_index[1]
-    expected_target_input = torch.cat([
-        atom_fea[graph.edge_index[0]],
-        atom_fea[graph.edge_index[1]],
-        edge_ij,
-    ], dim=-1)
-    expected_source_input = torch.cat([
-        atom_fea[graph.edge_index[1][edge_ik_indices]],
-        edge_ij[edge_ik_indices],
-        block.three_body.angle_basis(graph.triplet_cosine),
-    ], dim=-1)
+    expected_target_input = torch.cat(
+        [
+            atom_fea[graph.edge_index[0]],
+            atom_fea[graph.edge_index[1]],
+            edge_ij,
+        ],
+        dim=-1,
+    )
+    expected_source_input = torch.cat(
+        [
+            atom_fea[graph.edge_index[1][edge_ik_indices]],
+            edge_ij[edge_ik_indices],
+            block.three_body.angle_basis(graph.triplet_cosine),
+        ],
+        dim=-1,
+    )
 
     assert torch.equal(target_encoder.seen_input, expected_target_input)
     assert torch.equal(source_encoder.seen_input, expected_source_input)

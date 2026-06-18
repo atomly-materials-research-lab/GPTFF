@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, Union
+from typing import Any
 
 import numpy as np
 from monty.json import MSONable
@@ -14,8 +15,7 @@ from torch.utils.data import Dataset
 from gptff.graph import CrystalGraphConverter, GraphSample, batch_samples
 from gptff.utils.labels import convert_vasp_stress_to_gpa
 
-
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 @dataclass(frozen=True)
@@ -29,9 +29,9 @@ class AtomicSample(MSONable):
     structure: Structure
     energy: float
     forces: np.ndarray
-    stress: Optional[np.ndarray] = None
-    sample_id: Optional[str] = None
-    material_id: Optional[str] = None
+    stress: np.ndarray | None = None
+    sample_id: str | None = None
+    material_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -47,9 +47,7 @@ class AtomicSample(MSONable):
         forces = np.asarray(self.forces, dtype=np.float32)
         expected_force_shape = (self.structure.num_sites, 3)
         if forces.shape != expected_force_shape:
-            raise ValueError(
-                f"forces must have shape {expected_force_shape}, got {forces.shape}."
-            )
+            raise ValueError(f"forces must have shape {expected_force_shape}, got {forces.shape}.")
         if not np.all(np.isfinite(forces)):
             raise ValueError("forces must contain only finite values.")
 
@@ -85,7 +83,7 @@ class AtomicSample(MSONable):
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "AtomicSample":
+    def from_dict(cls, data: Mapping[str, Any]) -> AtomicSample:
         structure = data["structure"]
         if isinstance(structure, Mapping):
             structure = Structure.from_dict(structure)
@@ -105,7 +103,7 @@ class AtomicDataset(MSONable, Sequence[AtomicSample]):
     """Complete labeled dataset before graph conversion."""
 
     samples: tuple[AtomicSample, ...]
-    name: Optional[str] = None
+    name: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -117,12 +115,8 @@ class AtomicDataset(MSONable, Sequence[AtomicSample]):
         if not isinstance(self.metadata, Mapping):
             raise TypeError("metadata must be a mapping.")
 
-        sample_ids = Counter(
-            sample.sample_id for sample in samples if sample.sample_id is not None
-        )
-        duplicates = sorted(
-            sample_id for sample_id, count in sample_ids.items() if count > 1
-        )
+        sample_ids = Counter(sample.sample_id for sample in samples if sample.sample_id is not None)
+        duplicates = sorted(sample_id for sample_id, count in sample_ids.items() if count > 1)
         if duplicates:
             raise ValueError(f"sample_id values must be unique; duplicates: {duplicates}.")
 
@@ -142,7 +136,7 @@ class AtomicDataset(MSONable, Sequence[AtomicSample]):
             )
         return self.samples[index]
 
-    def subset(self, indices: Sequence[int], *, name: Optional[str] = None) -> "AtomicDataset":
+    def subset(self, indices: Sequence[int], *, name: str | None = None) -> AtomicDataset:
         return type(self)(
             samples=tuple(self.samples[int(index)] for index in indices),
             name=name,
@@ -163,7 +157,7 @@ class AtomicDataset(MSONable, Sequence[AtomicSample]):
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "AtomicDataset":
+    def from_dict(cls, data: Mapping[str, Any]) -> AtomicDataset:
         samples = tuple(
             sample if isinstance(sample, AtomicSample) else AtomicSample.from_dict(sample)
             for sample in data["samples"]
@@ -178,7 +172,7 @@ class AtomicDataset(MSONable, Sequence[AtomicSample]):
         dumpfn(self, filename)
 
     @classmethod
-    def from_file(cls, filename: PathLike) -> "AtomicDataset":
+    def from_file(cls, filename: PathLike) -> AtomicDataset:
         dataset = loadfn(filename)
         if isinstance(dataset, cls):
             return dataset
@@ -198,7 +192,7 @@ class GraphDataset(Dataset):
         angle_cutoff: float = 3.5,
         numerical_tol: float = 1e-8,
         cache_graphs: bool = False,
-        cache_size: Optional[int] = None,
+        cache_size: int | None = None,
     ) -> None:
         if not isinstance(atomic_dataset, AtomicDataset):
             raise TypeError("atomic_dataset must be an AtomicDataset.")
@@ -241,9 +235,7 @@ class GraphDataset(Dataset):
                 energy=sample.energy,
                 forces=sample.forces,
                 stress=(
-                    None
-                    if sample.stress is None
-                    else convert_vasp_stress_to_gpa(sample.stress)
+                    None if sample.stress is None else convert_vasp_stress_to_gpa(sample.stress)
                 ),
             )
         except Exception as exc:
@@ -267,7 +259,7 @@ def _stress_to_matrix(stress: np.ndarray) -> np.ndarray:
     raise ValueError(f"stress must have shape (3, 3) or (6,), got {stress.shape}.")
 
 
-def _optional_identifier(value: Optional[str], field_name: str) -> Optional[str]:
+def _optional_identifier(value: str | None, field_name: str) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
@@ -276,7 +268,7 @@ def _optional_identifier(value: Optional[str], field_name: str) -> Optional[str]
     return normalized
 
 
-def _normalize_cache_size(cache_size: Optional[int]) -> Optional[int]:
+def _normalize_cache_size(cache_size: int | None) -> int | None:
     if cache_size is None:
         return None
     cache_size = int(cache_size)

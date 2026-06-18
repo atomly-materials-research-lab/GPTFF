@@ -92,7 +92,9 @@ class GeometryEmbedding(nn.Module):
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
         self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
         self.edge_embedding = EdgeEmbedding(edge_feature_dim, num_radial)
-        self.edge_modulation = EdgeModulationProjection(atom_feature_dim, edge_feature_dim, num_radial)
+        self.edge_modulation = EdgeModulationProjection(
+            atom_feature_dim, edge_feature_dim, num_radial
+        )
         self.triplet_modulation = TripletModulationProjection(edge_feature_dim, num_radial)
 
     def forward(self, graph):

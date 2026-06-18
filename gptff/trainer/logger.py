@@ -3,10 +3,10 @@ from __future__ import annotations
 import csv
 import math
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence, TextIO, Protocol
-
+from typing import Protocol, TextIO
 
 HISTORY_FIELDS = (
     "epoch",

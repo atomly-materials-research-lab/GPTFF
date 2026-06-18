@@ -1,4 +1,3 @@
-from gptff.graph.converter import CrystalGraphConverter, enumerate_triplets
 from gptff.graph.containers import (
     CrystalGraph,
     CrystalGraphBatch,
@@ -7,6 +6,7 @@ from gptff.graph.containers import (
     batch_graphs,
     batch_samples,
 )
+from gptff.graph.converter import CrystalGraphConverter, enumerate_triplets
 
 __all__ = [
     "CrystalGraph",

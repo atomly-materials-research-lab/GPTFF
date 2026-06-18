@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
 from torch.utils.data import DataLoader
@@ -23,28 +23,27 @@ if TYPE_CHECKING:
 class GraphDatasetSplits:
     train: GraphDataset
     validation: GraphDataset
-    test: Optional[GraphDataset]
+    test: GraphDataset | None
 
 
 @dataclass(frozen=True)
 class DataLoaders:
     train: DataLoader
     validation: DataLoader
-    test: Optional[DataLoader]
+    test: DataLoader | None
 
 
-def load_atomic_dataset(config: "TrainingConfig") -> AtomicDataset:
+def load_atomic_dataset(config: TrainingConfig) -> AtomicDataset:
     if config.dataset_path is None:
         raise ValueError(
-            "data.dataset_path is required when Trainer.fit() is called without "
-            "an AtomicDataset."
+            "data.dataset_path is required when Trainer.fit() is called without an AtomicDataset."
         )
     return AtomicDataset.from_file(config.dataset_path)
 
 
 def build_graph_datasets(
     dataset: AtomicDataset,
-    config: "TrainingConfig",
+    config: TrainingConfig,
 ) -> GraphDatasetSplits:
     _validate_training_labels(dataset, require_stress=config.stress_loss_weight > 0.0)
     split = split_atomic_dataset(
@@ -76,7 +75,7 @@ def build_graph_datasets(
     )
 
 
-def apply_fitted_element_refs(config: "TrainingConfig", train_dataset) -> None:
+def apply_fitted_element_refs(config: TrainingConfig, train_dataset) -> None:
     if not config.element_references.fit_from_training_data:
         return
     if config.element_refs is not None:
@@ -92,7 +91,7 @@ def apply_fitted_element_refs(config: "TrainingConfig", train_dataset) -> None:
 
 
 def build_loaders(
-    config: "TrainingConfig",
+    config: TrainingConfig,
     datasets: GraphDatasetSplits,
     *,
     generators: dict[str, torch.Generator],
@@ -130,7 +129,7 @@ def build_loaders(
 
 def _build_graph_dataset(
     dataset: AtomicDataset,
-    config: "TrainingConfig",
+    config: TrainingConfig,
 ) -> GraphDataset:
     return GraphDataset(
         dataset,
@@ -149,9 +148,7 @@ def _validate_training_labels(
     if not require_stress:
         return
     missing = [
-        dataset.sample_key(index)
-        for index, sample in enumerate(dataset)
-        if sample.stress is None
+        dataset.sample_key(index) for index, sample in enumerate(dataset) if sample.stress is None
     ]
     if missing:
         preview = ", ".join(missing[:5])

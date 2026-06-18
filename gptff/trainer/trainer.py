@@ -4,9 +4,9 @@ import argparse
 import gc
 import math
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -24,34 +24,34 @@ from gptff.data import (
 from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import TrainingConfig, load_config
+from gptff.trainer.logger import (
+    CompositeLogger,
+    ConsoleLogger,
+    CSVLogger,
+    EpochLogRecord,
+    TrainingLogger,
+)
 from gptff.trainer.loss import (
     BatchLoss,
     compute_batch_loss,
 )
-from gptff.trainer.logger import (
-    CSVLogger,
-    CompositeLogger,
-    ConsoleLogger,
-    EpochLogRecord,
-    TrainingLogger,
-)
+from gptff.trainer.scheduler import Scheduler, build_lr_scheduler
 from gptff.utils.reproducibility import (
     configure_reproducibility,
     create_data_loader_generators,
 )
-from gptff.trainer.scheduler import Scheduler, build_lr_scheduler
 
 
 @dataclass
 class EpochMetrics:
-    loss: "AverageMeter"
-    energy_mae: "AverageMeter"
-    force_mae: "AverageMeter"
-    stress_mae: "AverageMeter"
+    loss: AverageMeter
+    energy_mae: AverageMeter
+    force_mae: AverageMeter
+    stress_mae: AverageMeter
     skipped_batches: int = 0
 
     @classmethod
-    def create(cls) -> "EpochMetrics":
+    def create(cls) -> EpochMetrics:
         return cls(
             loss=AverageMeter(),
             energy_mae=AverageMeter(),
@@ -59,7 +59,7 @@ class EpochMetrics:
             stress_mae=AverageMeter(),
         )
 
-    def as_postfix(self) -> Dict[str, str]:
+    def as_postfix(self) -> dict[str, str]:
         return {
             "loss": _format_meter(self.loss, precision=5),
             "MAE(e)": _format_meter(self.energy_mae, precision=5),
@@ -108,7 +108,7 @@ def select_validation_metric(metrics: EpochMetrics) -> float:
     return float("inf")
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a GPTFF model.")
     parser.add_argument("config", metavar="CONFIG", help="YAML training configuration")
     return parser.parse_args(argv)
@@ -132,7 +132,9 @@ def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Opt
     if optimizer_name == "radam":
         return optim.RAdam(model.parameters(), config.lr, weight_decay=config.weight_decay)
     if optimizer_name == "sgd":
-        return optim.SGD(model.parameters(), config.lr, momentum=0.9, weight_decay=config.weight_decay)
+        return optim.SGD(
+            model.parameters(), config.lr, momentum=0.9, weight_decay=config.weight_decay
+        )
     raise ValueError(f"Unsupported optimizer: {config.optimizer_name}")
 
 
@@ -435,7 +437,7 @@ def run_training(
     return Trainer(config).fit(dataset)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     config = load_config(args.config)
     run_training(config)

@@ -136,9 +136,13 @@ def test_stress_matches_strain_finite_difference():
     step = 1e-3
     volume = np.linalg.det(graph.lattice)
     finite_diff_stress = (
-        _energy_with_strain_delta(model, graph, strain_i, strain_j, step)
-        - _energy_with_strain_delta(model, graph, strain_i, strain_j, -step)
-    ) / (2 * step) / volume
+        (
+            _energy_with_strain_delta(model, graph, strain_i, strain_j, step)
+            - _energy_with_strain_delta(model, graph, strain_i, strain_j, -step)
+        )
+        / (2 * step)
+        / volume
+    )
 
     assert stress[0, strain_i, strain_j].item() == pytest.approx(
         finite_diff_stress * EV_PER_ANG3_TO_GPA,

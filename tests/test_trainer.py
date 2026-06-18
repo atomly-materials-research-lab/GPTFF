@@ -15,9 +15,9 @@ from gptff.data import (
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
 from gptff.trainer.logger import (
-    CSVLogger,
     CompositeLogger,
     ConsoleLogger,
+    CSVLogger,
     EpochLogRecord,
 )
 from gptff.trainer.loss import BatchLoss
@@ -214,10 +214,12 @@ def test_build_graph_datasets_passes_graph_cache_config():
 
 def test_build_graph_datasets_validates_required_stress_before_training():
     config = TrainingConfig.from_dict(_raw_config())
-    dataset = AtomicDataset((
-        _atomic_sample(0, stress=None),
-        _atomic_sample(1, stress=None),
-    ))
+    dataset = AtomicDataset(
+        (
+            _atomic_sample(0, stress=None),
+            _atomic_sample(1, stress=None),
+        )
+    )
 
     with pytest.raises(ValueError, match="stress labels are required"):
         build_graph_datasets(dataset, config)
@@ -271,14 +273,16 @@ def test_trainer_fit_writes_history_and_checkpoints(tmp_path):
     history = pd.read_csv(tmp_path / "history.csv")
     assert np.isfinite(best_metric)
     assert history.shape[0] == 1
-    assert set([
-        "epoch",
-        "lr",
-        "train_loss",
-        "val_loss",
-        "train_force_mae",
-        "val_force_mae",
-    ]).issubset(history.columns)
+    assert set(
+        [
+            "epoch",
+            "lr",
+            "train_loss",
+            "val_loss",
+            "train_force_mae",
+            "val_force_mae",
+        ]
+    ).issubset(history.columns)
     assert (tmp_path / "last.pt").exists()
     assert (tmp_path / "best.pt").exists()
 

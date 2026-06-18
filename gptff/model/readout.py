@@ -224,8 +224,7 @@ def _build_from_preset(
     if key not in ELEMENT_REF_PRESETS:
         available = ", ".join(available_element_ref_presets())
         raise ValueError(
-            f"Unknown element_refs preset '{preset_name}'. "
-            f"Available presets: {available}."
+            f"Unknown element_refs preset '{preset_name}'. Available presets: {available}."
         )
 
     refs = torch.as_tensor(ELEMENT_REF_PRESETS[key], dtype=dtype)
@@ -271,10 +270,7 @@ def _build_from_sequence(
         return refs
     if refs_tensor.numel() == max_atomic_number + 1:
         return refs_tensor.clone()
-    raise ValueError(
-        "element_refs must have length max_atomic_number or "
-        "max_atomic_number + 1."
-    )
+    raise ValueError("element_refs must have length max_atomic_number or max_atomic_number + 1.")
 
 
 class EnergyHead(nn.Module):
@@ -293,10 +289,12 @@ class EnergyHead(nn.Module):
 
         hidden_layers = []
         for _ in range(self.num_readout_layers - 1):
-            hidden_layers.extend([
-                nn.Linear(atom_feature_dim, atom_feature_dim),
-                nn.SiLU(),
-            ])
+            hidden_layers.extend(
+                [
+                    nn.Linear(atom_feature_dim, atom_feature_dim),
+                    nn.SiLU(),
+                ]
+            )
         self.hidden_mlp = nn.Sequential(*hidden_layers)
         self.output_layer = nn.Linear(atom_feature_dim, 1)
         self.register_buffer(
@@ -312,9 +310,13 @@ class EnergyHead(nn.Module):
 
     def reference_site_energy(self, atom_types, reference):
         if self.element_refs is not None:
-            return self.element_refs[atom_types].unsqueeze(-1).to(
-                dtype=reference.dtype,
-                device=reference.device,
+            return (
+                self.element_refs[atom_types]
+                .unsqueeze(-1)
+                .to(
+                    dtype=reference.dtype,
+                    device=reference.device,
+                )
             )
         return torch.zeros_like(reference)
 

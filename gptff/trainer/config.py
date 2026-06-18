@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any
 
 import yaml
 
@@ -11,13 +12,13 @@ from gptff.model import GPTFFConfig
 
 @dataclass(frozen=True)
 class DataConfig:
-    dataset_path: Optional[str] = None
+    dataset_path: str | None = None
     validation_fraction: float = 0.1
     test_fraction: float = 0.0
     split_seed: int = 42
     group_by_material: bool = False
     cache_graphs: bool = False
-    graph_cache_size: Optional[int] = None
+    graph_cache_size: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.validation_fraction < 1.0:
@@ -25,9 +26,7 @@ class DataConfig:
         if not 0.0 <= self.test_fraction < 1.0:
             raise ValueError("test_fraction must be between 0 and 1.")
         if self.validation_fraction + self.test_fraction >= 1.0:
-            raise ValueError(
-                "validation_fraction + test_fraction must be less than 1."
-            )
+            raise ValueError("validation_fraction + test_fraction must be less than 1.")
         if self.graph_cache_size is not None and self.graph_cache_size < 0:
             raise ValueError("graph_cache_size must be non-negative or null.")
 
@@ -76,7 +75,7 @@ class ElementReferenceConfig:
         raw_config: Any,
         *,
         base_dir: Path | None = None,
-    ) -> "ElementReferenceConfig":
+    ) -> ElementReferenceConfig:
         if raw_config is None:
             return cls()
         if not isinstance(raw_config, Mapping):
@@ -114,8 +113,8 @@ class TrainingConfig:
         cls,
         raw_config: Mapping[str, Any],
         *,
-        base_dir: Union[str, Path, None] = None,
-    ) -> "TrainingConfig":
+        base_dir: str | Path | None = None,
+    ) -> TrainingConfig:
         training = raw_config.get("training", {})
         data = raw_config["data"]
         model = raw_config.get("model", training)
@@ -165,9 +164,13 @@ class TrainingConfig:
                 deterministic=bool(training.get("deterministic", True)),
             ),
             loss=LossConfig(
-                energy_loss_weight=float(_config_value(loss, "energy_loss_weight", "weight_energy")),
+                energy_loss_weight=float(
+                    _config_value(loss, "energy_loss_weight", "weight_energy")
+                ),
                 force_loss_weight=float(_config_value(loss, "force_loss_weight", "weight_force")),
-                stress_loss_weight=float(_config_value(loss, "stress_loss_weight", "weight_stress")),
+                stress_loss_weight=float(
+                    _config_value(loss, "stress_loss_weight", "weight_stress")
+                ),
             ),
             element_references=element_references,
         )
@@ -186,7 +189,7 @@ class TrainingConfig:
         return self.model
 
     @property
-    def dataset_path(self) -> Optional[str]:
+    def dataset_path(self) -> str | None:
         return self.data.dataset_path
 
     @property
@@ -210,7 +213,7 @@ class TrainingConfig:
         return self.data.cache_graphs
 
     @property
-    def graph_cache_size(self) -> Optional[int]:
+    def graph_cache_size(self) -> int | None:
         return self.data.graph_cache_size
 
     @property
@@ -374,9 +377,9 @@ class TrainingConfig:
         return self.num_readout_layers
 
 
-def load_config(config_file: Union[str, Path]) -> TrainingConfig:
+def load_config(config_file: str | Path) -> TrainingConfig:
     config_path = Path(config_file)
-    with open(config_path, "r", encoding="utf-8") as fp:
+    with open(config_path, encoding="utf-8") as fp:
         raw_config = yaml.safe_load(fp)
     if not isinstance(raw_config, Mapping):
         raise ValueError("Training config must contain a top-level mapping")
@@ -414,7 +417,7 @@ def _resolve_element_reference_source(
 
 
 def _load_element_reference_file(path: Path) -> Any:
-    with open(path, "r", encoding="utf-8") as fp:
+    with open(path, encoding="utf-8") as fp:
         refs = yaml.safe_load(fp)
     if refs is None:
         raise ValueError(f"Element reference file is empty: {path}")
@@ -438,24 +441,20 @@ def _validate_element_reference_mapping_keys(refs: Mapping[Any, Any]) -> None:
         elif isinstance(key, str) and key.strip().isdigit():
             atomic_number = int(key)
         else:
-            raise ValueError(
-                "Element reference mapping keys must be atomic numbers, "
-                f"got {key!r}."
-            )
+            raise ValueError(f"Element reference mapping keys must be atomic numbers, got {key!r}.")
         if atomic_number < 1:
             raise ValueError(
-                "Element reference mapping keys must be positive atomic numbers, "
-                f"got {key!r}."
+                f"Element reference mapping keys must be positive atomic numbers, got {key!r}."
             )
 
 
-def _optional_int(value: Any) -> Optional[int]:
+def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
 
 
-def _optional_str(value: Any) -> Optional[str]:
+def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
@@ -470,20 +469,24 @@ def _scheduler_params(optimizer: Mapping[str, Any], epochs: int) -> dict[str, An
     learning_rate = float(_config_value(optimizer, "learning_rate", "lr"))
 
     if "min_learning_rate" in optimizer or "min_lr" in optimizer:
-        min_learning_rate = float(_config_value(
-            optimizer,
-            "min_learning_rate",
-            "min_lr",
-        ))
+        min_learning_rate = float(
+            _config_value(
+                optimizer,
+                "min_learning_rate",
+                "min_lr",
+            )
+        )
         params["decay_fraction"] = min_learning_rate / learning_rate
 
     if "lr_cycle_epochs" in optimizer or "num_train_steps" in optimizer:
-        params["T_max"] = int(_config_value(
-            optimizer,
-            "lr_cycle_epochs",
-            "num_train_steps",
-            default=10 * epochs,
-        ))
+        params["T_max"] = int(
+            _config_value(
+                optimizer,
+                "lr_cycle_epochs",
+                "num_train_steps",
+                default=10 * epochs,
+            )
+        )
 
     return params or {"decay_fraction": 1e-2}
 

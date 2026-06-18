@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -13,9 +12,9 @@ from gptff.trainer.config import TrainingConfig
 @dataclass
 class BatchLoss:
     loss: torch.Tensor
-    energy_mae: Optional[torch.Tensor]
-    force_mae: Optional[torch.Tensor]
-    stress_mae: Optional[torch.Tensor]
+    energy_mae: torch.Tensor | None
+    force_mae: torch.Tensor | None
+    stress_mae: torch.Tensor | None
     batch_size: int
     force_count: int = 0
     stress_count: int = 0

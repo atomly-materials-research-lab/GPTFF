@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
 
@@ -32,9 +32,7 @@ class DatasetSplit:
             raise ValueError("Validation split must not be empty.")
 
     def validate_for_dataset(self, dataset: AtomicDataset) -> None:
-        all_indices = sorted(
-            self.train_indices + self.validation_indices + self.test_indices
-        )
+        all_indices = sorted(self.train_indices + self.validation_indices + self.test_indices)
         if all_indices != list(range(len(dataset))):
             raise ValueError("Dataset split must contain every sample exactly once.")
 
@@ -83,16 +81,12 @@ def _grouped_split(
     groups: dict[str, list[int]] = defaultdict(list)
     for index, sample in enumerate(dataset):
         if sample.material_id is None:
-            raise ValueError(
-                "group_by_material requires material_id for every AtomicSample."
-            )
+            raise ValueError("group_by_material requires material_id for every AtomicSample.")
         groups[sample.material_id].append(index)
 
     active_partitions = [index for index, target in enumerate(target_counts) if target > 0]
     if len(groups) < len(active_partitions):
-        raise ValueError(
-            "Not enough distinct material_id groups to populate all requested splits."
-        )
+        raise ValueError("Not enough distinct material_id groups to populate all requested splits.")
 
     shuffled_groups = list(groups.values())
     rng.shuffle(shuffled_groups)
@@ -151,9 +145,7 @@ def _validate_split_fractions(
         raise ValueError("test_fraction must be between 0 and 1.")
     train_fraction = 1.0 - validation_fraction - test_fraction
     if train_fraction <= 0.0:
-        raise ValueError(
-            "validation_fraction + test_fraction must be less than 1."
-        )
+        raise ValueError("validation_fraction + test_fraction must be less than 1.")
     return train_fraction, validation_fraction, test_fraction
 
 
@@ -188,4 +180,3 @@ def _target_partition_counts(
         partition = min(removable, key=lambda index: ideal[index] - counts[index])
         counts[partition] -= 1
     return tuple(int(value) for value in counts)
-

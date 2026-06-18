@@ -8,19 +8,19 @@ from gptff.trainer.config import (
     TrainingLoopConfig,
     load_config,
 )
+from gptff.trainer.logger import (
+    CompositeLogger,
+    ConsoleLogger,
+    CSVLogger,
+    EpochLogRecord,
+    TrainingLogger,
+)
 from gptff.trainer.loss import (
     BatchLoss,
     compute_batch_loss,
     loss_weight_active,
     mae,
     validate_required_labels,
-)
-from gptff.trainer.logger import (
-    CSVLogger,
-    CompositeLogger,
-    ConsoleLogger,
-    EpochLogRecord,
-    TrainingLogger,
 )
 from gptff.trainer.trainer import Trainer, run_training
 

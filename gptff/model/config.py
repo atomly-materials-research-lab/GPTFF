@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ class AtomAttentionConfig:
             raise ValueError("atom_attention.ffn_hidden_dim must be positive or null.")
 
     @classmethod
-    def from_dict(cls, raw_config: Any) -> "AtomAttentionConfig":
+    def from_dict(cls, raw_config: Any) -> AtomAttentionConfig:
         if isinstance(raw_config, cls):
             return raw_config
         if raw_config is None:
@@ -86,15 +87,17 @@ class GPTFFConfig:
             raise ValueError("interaction_dropout must be in the range [0, 1).")
 
     @classmethod
-    def from_dict(cls, raw_config: Mapping[str, Any]) -> "GPTFFConfig":
+    def from_dict(cls, raw_config: Mapping[str, Any]) -> GPTFFConfig:
         return cls(
             atom_feature_dim=int(_config_value(raw_config, "atom_feature_dim", "node_feature_len")),
             edge_feature_dim=int(_config_value(raw_config, "edge_feature_dim", "edge_feature_len")),
-            num_interaction_blocks=int(_config_value(
-                raw_config,
-                "num_interaction_blocks",
-                "n_layers",
-            )),
+            num_interaction_blocks=int(
+                _config_value(
+                    raw_config,
+                    "num_interaction_blocks",
+                    "n_layers",
+                )
+            ),
             num_radial=int(raw_config.get("num_radial", 16)),
             num_angular=int(raw_config.get("num_angular", 4)),
             radial_cutoff=float(raw_config.get("radial_cutoff", 5.0)),
@@ -102,18 +105,22 @@ class GPTFFConfig:
             cutoff_coeff=int(raw_config.get("cutoff_coeff", 5)),
             max_atomic_number=int(raw_config.get("max_atomic_number", 94)),
             element_refs=raw_config.get("element_refs", None),
-            num_readout_layers=int(_config_value(
-                raw_config,
-                "num_readout_layers",
-                "n_readout_layers",
-                default=3,
-            )),
-            readout_atom_norm=bool(_config_value(
-                raw_config,
-                "readout_atom_norm",
-                "final_atom_norm",
-                default=True,
-            )),
+            num_readout_layers=int(
+                _config_value(
+                    raw_config,
+                    "num_readout_layers",
+                    "n_readout_layers",
+                    default=3,
+                )
+            ),
+            readout_atom_norm=bool(
+                _config_value(
+                    raw_config,
+                    "readout_atom_norm",
+                    "final_atom_norm",
+                    default=True,
+                )
+            ),
             interaction_dropout=float(raw_config.get("interaction_dropout", 0.0)),
             atom_attention=AtomAttentionConfig.from_dict(raw_config.get("atom_attention", None)),
         )

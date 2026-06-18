@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 EV_PER_ANG3_TO_GPA = 160.21766208
 VASP_KBAR_TO_GPA = -0.1
 

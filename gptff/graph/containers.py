@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -37,9 +37,9 @@ class CrystalGraph:
 @dataclass(frozen=True)
 class GraphSample:
     graph: CrystalGraph
-    energy: Optional[float] = None
-    forces: Optional[np.ndarray] = None
-    stress: Optional[np.ndarray] = None
+    energy: float | None = None
+    forces: np.ndarray | None = None
+    stress: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -59,18 +59,18 @@ class CrystalGraphBatch:
     num_edges: torch.Tensor
     atom_batch: torch.Tensor
     edge_batch: torch.Tensor
-    energy: Optional[torch.Tensor] = None
-    forces: Optional[torch.Tensor] = None
-    stress: Optional[torch.Tensor] = None
+    energy: torch.Tensor | None = None
+    forces: torch.Tensor | None = None
+    stress: torch.Tensor | None = None
 
     @classmethod
     def from_graphs(
         cls,
         graphs: Sequence[CrystalGraph],
-        energies: Optional[Sequence[float]] = None,
-        forces: Optional[Sequence[np.ndarray]] = None,
-        stresses: Optional[Sequence[np.ndarray]] = None,
-    ) -> "CrystalGraphBatch":
+        energies: Sequence[float] | None = None,
+        forces: Sequence[np.ndarray] | None = None,
+        stresses: Sequence[np.ndarray] | None = None,
+    ) -> CrystalGraphBatch:
         if len(graphs) == 0:
             raise ValueError("Cannot batch an empty graph list.")
 
@@ -123,7 +123,7 @@ class CrystalGraphBatch:
             stress=_optional_stack_tensor(stresses),
         )
 
-    def to(self, device: torch.device | str) -> "CrystalGraphBatch":
+    def to(self, device: torch.device | str) -> CrystalGraphBatch:
         fields = {
             name: value.to(device) if isinstance(value, torch.Tensor) else value
             for name, value in self.__dict__.items()
@@ -135,7 +135,7 @@ class CrystalGraphBatch:
         *,
         positions_requires_grad: bool = True,
         strain_requires_grad: bool = True,
-    ) -> "DifferentiableGraphBatch":
+    ) -> DifferentiableGraphBatch:
         positions = self.positions.detach().clone().requires_grad_(positions_requires_grad)
         strain = torch.zeros_like(
             self.lattice,
@@ -203,7 +203,7 @@ class DifferentiableGraphBatch(CrystalGraphBatch):
     triplet_lengths_ik: torch.Tensor = None
     triplet_cosine: torch.Tensor = None
 
-    def to(self, device: torch.device | str) -> "DifferentiableGraphBatch":
+    def to(self, device: torch.device | str) -> DifferentiableGraphBatch:
         fields = {
             name: value.to(device) if isinstance(value, torch.Tensor) else value
             for name, value in self.__dict__.items()
@@ -231,9 +231,7 @@ def _collect_optional_sample_field(samples: Sequence[GraphSample], field_name: s
         return values
     if not any(present):
         return None
-    raise ValueError(
-        f"Cannot batch samples with partially missing {field_name} labels."
-    )
+    raise ValueError(f"Cannot batch samples with partially missing {field_name} labels.")
 
 
 def _concat_axis1(arrays: Sequence[np.ndarray], rows: int, dtype: np.dtype) -> np.ndarray:
@@ -249,25 +247,24 @@ def _shared_cutoff(graphs: Sequence[CrystalGraph], field_name: str) -> float:
         value = float(getattr(graph, field_name))
         if not np.isclose(value, reference, rtol=0.0, atol=1e-8):
             raise ValueError(
-                f"Cannot batch graphs with different {field_name} values: "
-                f"{reference} and {value}."
+                f"Cannot batch graphs with different {field_name} values: {reference} and {value}."
             )
     return reference
 
 
-def _optional_float_tensor(values: Optional[Sequence[float]]) -> Optional[torch.Tensor]:
+def _optional_float_tensor(values: Sequence[float] | None) -> torch.Tensor | None:
     if values is None:
         return None
     return torch.tensor(np.asarray(values, dtype=np.float32), dtype=torch.float32)
 
 
-def _optional_concat_tensor(values: Optional[Sequence[np.ndarray]]) -> Optional[torch.Tensor]:
+def _optional_concat_tensor(values: Sequence[np.ndarray] | None) -> torch.Tensor | None:
     if values is None:
         return None
     return torch.tensor(np.concatenate(values, axis=0), dtype=torch.float32)
 
 
-def _optional_stack_tensor(values: Optional[Sequence[np.ndarray]]) -> Optional[torch.Tensor]:
+def _optional_stack_tensor(values: Sequence[np.ndarray] | None) -> torch.Tensor | None:
     if values is None:
         return None
     return torch.tensor(np.stack(values, axis=0), dtype=torch.float32)

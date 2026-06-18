@@ -43,11 +43,13 @@ class MLP(nn.Module):
         layers = []
         prev_dim = int(input_dim)
         for hidden_dim in _as_hidden_dims(hidden_dims):
-            layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
-                nn.SiLU(),
-                nn.Dropout(dropout),
-            ])
+            layers.extend(
+                [
+                    nn.Linear(prev_dim, hidden_dim),
+                    nn.SiLU(),
+                    nn.Dropout(dropout),
+                ]
+            )
             prev_dim = hidden_dim
 
         self.hidden_layers = nn.Sequential(*layers)
@@ -98,9 +100,7 @@ class EdgeUpdate(nn.Module):
         self.atom_feature_dim = atom_feature_dim
         self.edge_feature_dim = edge_feature_dim
         self.modulation_projection = (
-            nn.Linear(num_radial, edge_feature_dim, bias=False)
-            if num_radial is not None
-            else None
+            nn.Linear(num_radial, edge_feature_dim, bias=False) if num_radial is not None else None
         )
         self.message_gate = GatedMLP(
             2 * atom_feature_dim + edge_feature_dim,
@@ -109,18 +109,20 @@ class EdgeUpdate(nn.Module):
         )
 
     def forward(self, atom_features, edge_features, graph, edge_modulation):
-        pair_features = torch.cat([
-            atom_features[graph.edge_index[0]],
-            atom_features[graph.edge_index[1]],
-            edge_features,
-        ], dim=-1)
+        pair_features = torch.cat(
+            [
+                atom_features[graph.edge_index[0]],
+                atom_features[graph.edge_index[1]],
+                edge_features,
+            ],
+            dim=-1,
+        )
 
         edge_message = self.message_gate(pair_features)
         if edge_modulation.shape[-1] != self.edge_feature_dim:
             if self.modulation_projection is None:
                 raise ValueError(
-                    "edge_modulation must have edge feature dimension "
-                    f"{self.edge_feature_dim}."
+                    f"edge_modulation must have edge feature dimension {self.edge_feature_dim}."
                 )
             edge_modulation = self.modulation_projection(edge_modulation)
         return edge_message * edge_modulation
@@ -166,19 +168,27 @@ class ThreeBodyEdgeDelta(nn.Module):
         target_edge_indices = graph.triplet_edge_index[0]
         source_edge_indices = graph.triplet_edge_index[1]
 
-        target_features = torch.cat([
-            atom_features[graph.edge_index[0]],
-            atom_features[graph.edge_index[1]],
-            edge_features,
-        ], dim=-1)
+        target_features = torch.cat(
+            [
+                atom_features[graph.edge_index[0]],
+                atom_features[graph.edge_index[1]],
+                edge_features,
+            ],
+            dim=-1,
+        )
         target_message = self.target_encoder(target_features) * triplet_modulation
 
-        source_features = torch.cat([
-            atom_features[graph.edge_index[1][source_edge_indices]],
-            edge_features[source_edge_indices],
-            self.angle_basis(graph.triplet_cosine),
-        ], dim=-1)
-        source_message = self.source_encoder(source_features) * triplet_modulation[source_edge_indices]
+        source_features = torch.cat(
+            [
+                atom_features[graph.edge_index[1][source_edge_indices]],
+                edge_features[source_edge_indices],
+                self.angle_basis(graph.triplet_cosine),
+            ],
+            dim=-1,
+        )
+        source_message = (
+            self.source_encoder(source_features) * triplet_modulation[source_edge_indices]
+        )
 
         aggregated_source_message = sum_aggregation(
             source_message,
@@ -213,11 +223,14 @@ class AtomFeatureDelta(nn.Module):
         )
 
     def forward(self, atom_features, edge_features, edge_modulation, graph):
-        pair_features = torch.cat([
-            atom_features[graph.edge_index[0]],
-            atom_features[graph.edge_index[1]],
-            edge_features,
-        ], dim=-1)
+        pair_features = torch.cat(
+            [
+                atom_features[graph.edge_index[0]],
+                atom_features[graph.edge_index[1]],
+                edge_features,
+            ],
+            dim=-1,
+        )
         atom_message = self.message_gate(self.message_encoder(pair_features))
         atom_message = atom_message * edge_modulation
 
@@ -314,12 +327,15 @@ class InvariantAtomAttention(nn.Module):
 
         center_indices = graph.edge_index[0]
         neighbor_indices = graph.edge_index[1]
-        pair_features = torch.cat([
-            atom_features[center_indices],
-            atom_features[neighbor_indices],
-            edge_features,
-            edge_basis,
-        ], dim=-1)
+        pair_features = torch.cat(
+            [
+                atom_features[center_indices],
+                atom_features[neighbor_indices],
+                edge_features,
+                edge_basis,
+            ],
+            dim=-1,
+        )
 
         logits = self.score(pair_features)
         attention = cutoff_weighted_softmax(
@@ -383,11 +399,13 @@ class InteractionBlock(nn.Module):
         super().__init__()
 
         self.residual_dropout = nn.Dropout(dropout)
-        attention_enabled = bool(_attention_config_value(
-            atom_attention_config,
-            "enabled",
-            False,
-        ))
+        attention_enabled = bool(
+            _attention_config_value(
+                atom_attention_config,
+                "enabled",
+                False,
+            )
+        )
         self.three_body = ThreeBodyEdgeDelta(
             atom_feature_dim=atom_feature_dim,
             edge_feature_dim=edge_feature_dim,
@@ -412,21 +430,27 @@ class InteractionBlock(nn.Module):
         self.attention_ffn = None
         self.attention_ffn_norm = None
         if attention_enabled:
-            attention_dropout = float(_attention_config_value(
-                atom_attention_config,
-                "dropout",
-                0.0,
-            ))
-            attention_num_heads = int(_attention_config_value(
-                atom_attention_config,
-                "num_heads",
-                4,
-            ))
-            use_ffn = bool(_attention_config_value(
-                atom_attention_config,
-                "use_ffn",
-                True,
-            ))
+            attention_dropout = float(
+                _attention_config_value(
+                    atom_attention_config,
+                    "dropout",
+                    0.0,
+                )
+            )
+            attention_num_heads = int(
+                _attention_config_value(
+                    atom_attention_config,
+                    "num_heads",
+                    4,
+                )
+            )
+            use_ffn = bool(
+                _attention_config_value(
+                    atom_attention_config,
+                    "use_ffn",
+                    True,
+                )
+            )
             ffn_hidden_dim = _attention_config_value(
                 atom_attention_config,
                 "ffn_hidden_dim",

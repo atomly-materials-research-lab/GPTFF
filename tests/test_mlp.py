@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from gptff.model.layers import GatedMLP, MLP
+from gptff.model.layers import MLP, GatedMLP
 
 
 def test_mlp_returns_expected_shape_and_finite_output():

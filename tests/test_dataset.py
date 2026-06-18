@@ -168,10 +168,7 @@ def test_random_split_is_deterministic_and_complete():
 
 
 def test_grouped_split_keeps_material_frames_together():
-    samples = tuple(
-        _sample(index, material_id=f"material-{index // 3}")
-        for index in range(12)
-    )
+    samples = tuple(_sample(index, material_id=f"material-{index // 3}") for index in range(12))
     dataset = AtomicDataset(samples)
 
     split = split_atomic_dataset(

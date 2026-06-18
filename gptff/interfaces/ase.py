@@ -1,18 +1,15 @@
-from typing import Optional
-
 import torch
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
+from gptff.inference import predict_energy_forces_stress
 from gptff.model.config import GPTFFConfig
 from gptff.model.model import GPTFF
-from gptff.inference import predict_energy_forces_stress
 from gptff.utils.labels import stress_gpa_to_ase_voigt
 
 
 class ASECalculator(Calculator):
-
     implemented_properties = ["energy", "free_energy", "forces", "stress"]
 
     def __init__(self, model_path, device="cuda", **kwargs):
@@ -41,9 +38,9 @@ class ASECalculator(Calculator):
 
     def calculate(
         self,
-        atoms: Optional[Atoms] = None,
-        properties: Optional[list] = None,
-        system_changes: Optional[list] = None,
+        atoms: Atoms | None = None,
+        properties: list | None = None,
+        system_changes: list | None = None,
     ):
 
         properties = properties or ["energy", "forces"]

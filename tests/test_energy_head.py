@@ -1,6 +1,6 @@
 import numpy as np
-import torch
 import pytest
+import torch
 
 from gptff.graph import CrystalGraph, GraphSample
 from gptff.model.readout import (
@@ -80,7 +80,9 @@ def test_energy_head_exposes_site_energy_decomposition():
 
     assert torch.equal(output.residual_site_energy, torch.zeros_like(output.residual_site_energy))
     assert torch.allclose(output.reference_site_energy, expected_reference)
-    assert torch.allclose(output.site_energy, output.residual_site_energy + output.reference_site_energy)
+    assert torch.allclose(
+        output.site_energy, output.residual_site_energy + output.reference_site_energy
+    )
     assert torch.allclose(output.energy, expected_energy)
     assert torch.allclose(output.energy.squeeze(-1), torch.tensor([0.5, -1.5]))
 

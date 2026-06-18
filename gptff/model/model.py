@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 from gptff.model.config import GPTFFConfig
@@ -42,22 +41,22 @@ class GPTFF(nn.Module):
             cutoff_coeff=cutoff_coeff,
         )
         self.readout_atom_norm = (
-            nn.LayerNorm(atom_feature_dim)
-            if config.readout_atom_norm
-            else nn.Identity()
+            nn.LayerNorm(atom_feature_dim) if config.readout_atom_norm else nn.Identity()
         )
 
-        self.interactions = nn.ModuleList([
-            InteractionBlock(
-                atom_feature_dim=atom_feature_dim,
-                edge_feature_dim=edge_feature_dim,
-                num_angular=num_angular,
-                num_radial=num_radial,
-                dropout=config.interaction_dropout,
-                atom_attention_config=config.atom_attention,
-            )
-            for _ in range(num_interaction_blocks)
-        ])
+        self.interactions = nn.ModuleList(
+            [
+                InteractionBlock(
+                    atom_feature_dim=atom_feature_dim,
+                    edge_feature_dim=edge_feature_dim,
+                    num_angular=num_angular,
+                    num_radial=num_radial,
+                    dropout=config.interaction_dropout,
+                    atom_attention_config=config.atom_attention,
+                )
+                for _ in range(num_interaction_blocks)
+            ]
+        )
 
         self.readout = EnergyHead(
             atom_feature_dim,
@@ -79,7 +78,7 @@ class GPTFF(nn.Module):
         atom_features = self.atom_embedding(graph.atom_types)
         geometry_features = self.geometry_embedding(graph)
         edge_features = geometry_features.edge_features
-        
+
         for interaction in self.interactions:
             atom_features, edge_features = interaction(
                 atom_features,
@@ -89,13 +88,13 @@ class GPTFF(nn.Module):
             )
 
         atom_features = self.readout_atom_norm(atom_features)
-        return self.readout(atom_features, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0])
+        return self.readout(
+            atom_features, graph.atom_types, graph.atom_batch, graph.num_atoms.shape[0]
+        )
 
 
 def _validate_cutoff(name: str, graph_value: float, model_value: float) -> None:
     graph_value = float(graph_value)
     model_value = float(model_value)
     if abs(graph_value - model_value) > 1e-6:
-        raise ValueError(
-            f"Graph {name} {graph_value} does not match model {name} {model_value}."
-        )
+        raise ValueError(f"Graph {name} {graph_value} does not match model {name} {model_value}.")
