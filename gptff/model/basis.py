@@ -73,7 +73,7 @@ class RadialBesselBasis(nn.Module):
 
 
 class LegendreAngleBasis(nn.Module):
-    def __init__(self, num_angular: int = 9):
+    def __init__(self, num_angular: int = 6):
         super().__init__()
         if num_angular <= 0:
             raise ValueError("num_angular must be positive.")

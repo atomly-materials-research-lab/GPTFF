@@ -46,7 +46,7 @@ class GPTFFConfig:
     edge_feature_dim: int
     num_interaction_blocks: int
     num_radial: int = 16
-    num_angular: int = 9
+    num_angular: int = 6
     radial_cutoff: float = 5.0
     angle_cutoff: float = 3.5
     cutoff_coeff: int = 5
@@ -99,7 +99,7 @@ class GPTFFConfig:
                 )
             ),
             num_radial=int(raw_config.get("num_radial", 16)),
-            num_angular=int(raw_config.get("num_angular", 9)),
+            num_angular=int(raw_config.get("num_angular", 6)),
             radial_cutoff=float(raw_config.get("radial_cutoff", 5.0)),
             angle_cutoff=float(raw_config.get("angle_cutoff", 3.5)),
             cutoff_coeff=int(raw_config.get("cutoff_coeff", 5)),
