@@ -305,7 +305,7 @@ def test_apply_fitted_element_refs_updates_checkpoint_config():
     assert config.checkpoint_dict()["element_references"]["source"] == "fit"
 
 
-def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypatch):
+def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypatch, capsys):
     raw_config = _raw_config()
     raw_config["training"]["output_dir"] = str(tmp_path)
     raw_config["training"]["epochs"] = 1
@@ -349,6 +349,7 @@ def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypat
     assert (tmp_path / "last.pt").exists()
     assert (tmp_path / "best.pt").exists()
     assert progress_descriptions == ["Train 1/1", "Validation 1/1"]
+    assert "Dataset samples: total=2, train=1, validation=1, test=0" in capsys.readouterr().out
 
 
 def test_csv_logger_appends_epoch_records(tmp_path):

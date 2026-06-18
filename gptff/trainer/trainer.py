@@ -317,6 +317,15 @@ class Trainer:
             dataset,
             self.config,
         )
+        test_size = len(datasets.test) if datasets.test is not None else 0
+        print(
+            "Dataset samples: "
+            f"total={len(dataset)}, "
+            f"train={len(datasets.train)}, "
+            f"validation={len(datasets.validation)}, "
+            f"test={test_size}",
+            flush=True,
+        )
         apply_fitted_element_refs(self.config, datasets.train)
         loaders = build_loaders(
             self.config,
@@ -328,7 +337,7 @@ class Trainer:
         self.test_loader = loaders.test
 
         self.model = build_model(self.config)
-        print(f"Number of Model parameters: {count_parameters(self.model)}")
+        print(f"Number of Model parameters: {count_parameters(self.model)}", flush=True)
 
         self.optimizer = build_optimizer(self.model, self.config)
         self.scheduler = build_scheduler(self.optimizer, self.config)
