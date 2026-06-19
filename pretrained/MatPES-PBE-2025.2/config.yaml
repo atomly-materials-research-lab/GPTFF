@@ -2,7 +2,7 @@ model:
   atom_feature_dim: 64
   edge_feature_dim: 64
   num_interaction_blocks: 3
-  num_radial: 9
+  num_radial: 6
   num_angular: 6
   radial_cutoff: 5.0
   angle_cutoff: 4.0
@@ -17,6 +17,9 @@ model:
     dropout: 0.0
     use_ffn: true
     ffn_hidden_dim: null
+    edge_degree:
+      enabled: true
+      rescale: sqrt_mean
 
 element_references:
   source: data/MatPES-PBE-element-refs.json

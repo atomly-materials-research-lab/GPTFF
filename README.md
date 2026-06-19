@@ -251,7 +251,7 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `num_readout_layers`: Number of linear layers in the atom-wise energy readout
 - `readout_atom_norm`: If true, apply LayerNorm to atom features before the energy readout
 - `interaction_dropout`: Dropout probability inside interaction blocks
-- `atom_attention`: Optional cutoff-aware invariant atom attention mixer. It is disabled by default. When enabled, `num_heads`, `dropout`, `use_ffn`, and `ffn_hidden_dim` control the residual attention branch after atom update.
+- `atom_attention`: Optional cutoff-aware invariant atom attention mixer. It is disabled by default. When enabled, `num_heads`, `dropout`, `use_ffn`, and `ffn_hidden_dim` control the residual attention branch after atom update. The nested `edge_degree` block enables a sum-aggregated coordination embedding before attention; it is ignored when `atom_attention.enabled=false`.
 
 `element_references`:
 - `source`: Elemental reference energy source. Use `"atomly"`, `"fit"`, `null`, a mapping, a list, or a YAML/JSON file path. Mapping keys must be atomic numbers.

@@ -242,6 +242,89 @@ class AtomFeatureDelta(nn.Module):
         )
 
 
+class EdgeDegreeEmbedding(nn.Module):
+    def __init__(
+        self,
+        atom_feature_dim,
+        edge_feature_dim,
+        num_radial,
+        *,
+        rescale="sqrt_mean",
+        dropout=0.0,
+        eps=1e-12,
+    ):
+        super().__init__()
+        if rescale not in {"sqrt_mean", "none"}:
+            raise ValueError("edge-degree rescale must be 'sqrt_mean' or 'none'.")
+
+        self.atom_feature_dim = int(atom_feature_dim)
+        self.edge_feature_dim = int(edge_feature_dim)
+        self.num_radial = int(num_radial)
+        self.rescale = str(rescale)
+        self.eps = float(eps)
+        input_dim = 2 * atom_feature_dim + edge_feature_dim + num_radial
+        self.message = MLP(
+            input_dim,
+            atom_feature_dim,
+            hidden_dims=atom_feature_dim,
+            dropout=dropout,
+            activate_output=True,
+        )
+
+    def forward(
+        self,
+        atom_features,
+        edge_features,
+        graph,
+        edge_basis,
+        edge_cutoff,
+        edge_modulation,
+    ):
+        if graph.edge_index.numel() == 0:
+            return torch.zeros_like(atom_features)
+
+        center_indices = graph.edge_index[0]
+        neighbor_indices = graph.edge_index[1]
+        pair_features = torch.cat(
+            [
+                atom_features[center_indices],
+                atom_features[neighbor_indices],
+                edge_features,
+                edge_basis,
+            ],
+            dim=-1,
+        )
+        messages = self.message(pair_features) * edge_modulation
+        aggregated = sum_aggregation(
+            messages,
+            center_indices,
+            dim_size=atom_features.shape[0],
+            reference=atom_features,
+        )
+        if self.rescale == "none":
+            return aggregated
+        scale = self._sqrt_mean_degree_scale(
+            graph,
+            center_indices,
+            edge_cutoff,
+            atom_features,
+        )
+        return aggregated / scale
+
+    def _sqrt_mean_degree_scale(self, graph, center_indices, edge_cutoff, atom_features):
+        continuous_degree = sum_aggregation(
+            edge_cutoff.reshape(-1, 1),
+            center_indices,
+            dim_size=atom_features.shape[0],
+            reference=atom_features[:, :1],
+        )
+        degree_sum = atom_features.new_zeros((graph.num_atoms.shape[0], 1))
+        degree_sum.index_add_(0, graph.atom_batch, continuous_degree)
+        num_atoms = graph.num_atoms.reshape(-1, 1).to(dtype=atom_features.dtype)
+        mean_degree = degree_sum / num_atoms.clamp_min(1)
+        return torch.sqrt(mean_degree[graph.atom_batch].clamp_min(self.eps))
+
+
 def cutoff_weighted_softmax(
     logits: torch.Tensor,
     indices: torch.Tensor,
@@ -437,6 +520,8 @@ class InteractionBlock(nn.Module):
         self.pair_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.triplet_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.atom_norm = nn.LayerNorm(atom_feature_dim)
+        self.edge_degree_embedding = None
+        self.edge_degree_norm = None
         self.atom_attention = None
         self.attention_norm = None
         self.attention_ffn = None
@@ -468,6 +553,34 @@ class InteractionBlock(nn.Module):
                 "ffn_hidden_dim",
                 None,
             )
+            edge_degree_config = _attention_config_value(
+                atom_attention_config,
+                "edge_degree",
+                None,
+            )
+            edge_degree_enabled = bool(
+                _attention_config_value(
+                    edge_degree_config,
+                    "enabled",
+                    True,
+                )
+            )
+            edge_degree_rescale = str(
+                _attention_config_value(
+                    edge_degree_config,
+                    "rescale",
+                    "sqrt_mean",
+                )
+            )
+            if edge_degree_enabled:
+                self.edge_degree_embedding = EdgeDegreeEmbedding(
+                    atom_feature_dim=atom_feature_dim,
+                    edge_feature_dim=edge_feature_dim,
+                    num_radial=num_radial,
+                    rescale=edge_degree_rescale,
+                    dropout=attention_dropout,
+                )
+                self.edge_degree_norm = nn.LayerNorm(atom_feature_dim)
             self.atom_attention = InvariantAtomAttention(
                 atom_feature_dim=atom_feature_dim,
                 edge_feature_dim=edge_feature_dim,
@@ -510,6 +623,17 @@ class InteractionBlock(nn.Module):
         atom_features = atom_features + self.residual_dropout(atom_delta)
 
         if self.atom_attention is not None:
+            if self.edge_degree_embedding is not None:
+                edge_degree_delta = self.edge_degree_embedding(
+                    self.edge_degree_norm(atom_features),
+                    edge_features,
+                    graph,
+                    geometry_features.edge_basis,
+                    geometry_features.edge_cutoff,
+                    geometry_features.edge_modulation.atom_message,
+                )
+                atom_features = atom_features + edge_degree_delta
+
             attention_delta = self.atom_attention(
                 self.attention_norm(atom_features),
                 edge_features,

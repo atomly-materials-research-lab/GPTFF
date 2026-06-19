@@ -6,6 +6,7 @@ from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFF, GPTFFConfig
 from gptff.model.encoders import EdgeModulation, GeometryFeatures
 from gptff.model.layers import (
+    EdgeDegreeEmbedding,
     InteractionBlock,
     InvariantAtomAttention,
     cutoff_weighted_softmax,
@@ -55,6 +56,12 @@ def test_default_model_uses_interaction_blocks():
     assert not hasattr(model.interactions[0], "atom_edge_norm")
     assert not hasattr(model.interactions[0], "residual_zero_init")
     assert not hasattr(model.interactions[0].edge_update, "message_projection")
+    assert model.interactions[0].edge_degree_embedding is None
+    assert model.interactions[0].atom_attention is None
+    assert model.interactions[0].attention_ffn is None
+    assert model.interactions[0].edge_degree_norm is None
+    assert model.interactions[0].attention_norm is None
+    assert model.interactions[0].attention_ffn_norm is None
 
 
 def test_interaction_block_returns_finite_atom_and_edge_features():
@@ -213,11 +220,26 @@ def test_interaction_block_can_enable_atom_attention():
         features,
     )
 
+    assert isinstance(model.interactions[0].edge_degree_embedding, EdgeDegreeEmbedding)
     assert isinstance(model.interactions[0].atom_attention, InvariantAtomAttention)
     assert atom_out.shape == atom_fea.shape
     assert edge_out.shape == features.edge_features.shape
     assert torch.isfinite(atom_out).all()
     assert torch.isfinite(edge_out).all()
+
+
+def test_interaction_block_can_disable_edge_degree_attention_branch():
+    cfg = _cfg(
+        atom_attention={
+            "enabled": True,
+            "num_heads": 2,
+            "edge_degree": False,
+        },
+    )
+    model = GPTFF(cfg)
+
+    assert model.interactions[0].edge_degree_embedding is None
+    assert isinstance(model.interactions[0].atom_attention, InvariantAtomAttention)
 
 
 def test_interaction_block_uses_unscaled_residual_addition():
@@ -319,6 +341,66 @@ def test_atom_update_uses_sum_aggregation():
     expected.index_add_(0, graph.edge_index[0], torch.ones_like(atom_fea[graph.edge_index[0]]))
 
     assert torch.equal(atom_delta, expected)
+
+
+def test_edge_degree_embedding_uses_sum_aggregation():
+    graph = _batch()
+    model = GPTFF(_cfg())
+    edge_degree = EdgeDegreeEmbedding(
+        atom_feature_dim=model.atom_feature_dim,
+        edge_feature_dim=model.edge_feature_dim,
+        num_radial=model.num_radial,
+        rescale="none",
+    )
+    edge_degree.message = _ConstantFeature(
+        output_dim=model.atom_feature_dim,
+        value=1.0,
+    )
+
+    atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
+    edge_basis = torch.zeros((graph.edge_index.shape[1], model.num_radial))
+    edge_modulation = torch.ones_like(atom_fea[graph.edge_index[0]])
+
+    delta = edge_degree(
+        atom_fea,
+        edge_ij,
+        graph,
+        edge_basis,
+        torch.ones((graph.edge_index.shape[1], 1)),
+        edge_modulation,
+    )
+    expected = torch.zeros_like(atom_fea)
+    expected.index_add_(0, graph.edge_index[0], edge_modulation)
+
+    assert torch.equal(delta, expected)
+
+
+def test_edge_degree_embedding_returns_zero_with_zero_cutoff_inputs():
+    graph = _batch()
+    model = GPTFF(_cfg())
+    edge_degree = EdgeDegreeEmbedding(
+        atom_feature_dim=model.atom_feature_dim,
+        edge_feature_dim=model.edge_feature_dim,
+        num_radial=model.num_radial,
+        rescale="none",
+    )
+
+    atom_fea = model.atom_embedding(graph.atom_types)
+    edge_ij = torch.zeros((graph.edge_index.shape[1], model.edge_feature_dim))
+    edge_basis = torch.zeros((graph.edge_index.shape[1], model.num_radial))
+    edge_modulation = torch.zeros_like(atom_fea[graph.edge_index[0]])
+
+    delta = edge_degree(
+        atom_fea,
+        edge_ij,
+        graph,
+        edge_basis,
+        torch.zeros((graph.edge_index.shape[1], 1)),
+        edge_modulation,
+    )
+
+    assert torch.equal(delta, torch.zeros_like(atom_fea))
 
 
 def test_three_body_update_uses_sum_aggregation():
