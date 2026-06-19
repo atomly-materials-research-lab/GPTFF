@@ -261,17 +261,29 @@ def cutoff_weighted_softmax(
         raise ValueError("edge_cutoff must have one value per edge.")
 
     expanded_indices = indices.reshape(-1, 1).expand(-1, logits.shape[1])
+    positive_cutoff = edge_cutoff > 0
+    weighted_logits = torch.where(
+        positive_cutoff,
+        logits + torch.log(edge_cutoff.clamp_min(eps)),
+        torch.full_like(logits, -torch.inf),
+    )
     with torch.no_grad():
         max_logits = logits.new_full((dim_size, logits.shape[1]), -torch.inf)
         max_logits.scatter_reduce_(
             0,
             expanded_indices,
-            logits,
+            weighted_logits,
             reduce="amax",
             include_self=True,
-        )
+    )
 
-    weights = edge_cutoff * torch.exp(logits - max_logits[indices])
+    shifted_logits = weighted_logits - max_logits[indices]
+    shifted_logits = torch.where(
+        torch.isfinite(shifted_logits),
+        shifted_logits,
+        torch.zeros_like(shifted_logits),
+    )
+    weights = torch.where(positive_cutoff, torch.exp(shifted_logits), torch.zeros_like(logits))
     normalizer = logits.new_zeros((dim_size, logits.shape[1]))
     normalizer.index_add_(0, indices, weights)
     return weights / normalizer[indices].clamp_min(eps)

@@ -151,6 +151,23 @@ def test_cutoff_weighted_softmax_removes_zero_cutoff_edges():
     assert torch.allclose(attention[2], torch.ones(2))
 
 
+def test_cutoff_weighted_softmax_ignores_zero_cutoff_logits_in_stabilization():
+    logits = torch.tensor([[0.0], [1_000.0], [1.0]])
+    indices = torch.tensor([0, 0, 0])
+    edge_cutoff = torch.tensor([[1.0], [0.0], [1.0]])
+
+    attention = cutoff_weighted_softmax(
+        logits,
+        indices,
+        dim_size=1,
+        edge_cutoff=edge_cutoff,
+    )
+
+    expected = torch.softmax(torch.tensor([[0.0], [1.0]]).reshape(-1), dim=0)
+    assert torch.allclose(attention[[0, 2], 0], expected)
+    assert attention[1, 0] == 0
+
+
 def test_invariant_atom_attention_returns_zero_with_zero_cutoff():
     graph = _batch()
     model = GPTFF(_cfg())
