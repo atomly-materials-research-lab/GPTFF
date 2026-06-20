@@ -79,16 +79,8 @@ def _meter_avg_or_nan(meter: AverageMeter) -> float:
     return meter.avg if meter.count > 0 else float("nan")
 
 
-def select_validation_metric(metrics: EpochMetrics) -> float:
-    for meter in (
-        metrics.energy_mae,
-        metrics.force_mae,
-        metrics.stress_mae,
-        metrics.loss,
-    ):
-        if meter.count > 0:
-            return meter.avg
-    return float("inf")
+def _meter_avg_or_inf(meter: AverageMeter) -> float:
+    return meter.avg if meter.count > 0 else float("inf")
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
@@ -294,7 +286,8 @@ class Trainer:
         self.val_loader = None
         self.test_loader = None
         self.data_loader_generators: dict[str, torch.Generator] = {}
-        self.best_validation_metric = 1e12
+        self.best_energy_mae = float("inf")
+        self.best_force_mae = float("inf")
         self.logger = logger
 
     def setup(self, dataset: AtomicDataset | None = None) -> None:
@@ -388,21 +381,26 @@ class Trainer:
                     )
                 )
 
-                validation_metric = select_validation_metric(val_metrics)
-                is_best = validation_metric < self.best_validation_metric
-                self.best_validation_metric = min(validation_metric, self.best_validation_metric)
+                validation_energy_mae = _meter_avg_or_inf(val_metrics.energy_mae)
+                validation_force_mae = _meter_avg_or_inf(val_metrics.force_mae)
+                is_best_energy = validation_energy_mae < self.best_energy_mae
+                is_best_force = validation_force_mae < self.best_force_mae
+                self.best_energy_mae = min(validation_energy_mae, self.best_energy_mae)
+                self.best_force_mae = min(validation_force_mae, self.best_force_mae)
                 save_checkpoint(
                     self.output_dir,
                     self.model,
                     self.config,
                     epoch=current_epoch,
-                    best_validation_metric=self.best_validation_metric,
-                    is_best=is_best,
+                    best_energy_mae=self.best_energy_mae,
+                    best_force_mae=self.best_force_mae,
+                    is_best_energy=is_best_energy,
+                    is_best_force=is_best_force,
                 )
         finally:
             self.logger.close()
 
-        return self.best_validation_metric
+        return self.best_force_mae
 
 
 def run_training(

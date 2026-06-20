@@ -274,7 +274,9 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `seed`: Random seed shared by Python, NumPy, PyTorch, CUDA, and DataLoader shuffling
 - `deterministic`: If true, require deterministic PyTorch algorithms and disable cuDNN benchmarking
 
-Model checkpoints are written at epoch boundaries.
+Model checkpoints are written at epoch boundaries. `last.pt` stores the latest model,
+`bestE.pt` stores the lowest validation energy MAE checkpoint, and `bestF.pt`
+stores the lowest validation force MAE checkpoint.
 
 `loss`:
 - `energy_loss_weight`: Weight factor of the energy loss

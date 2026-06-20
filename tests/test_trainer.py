@@ -347,7 +347,8 @@ def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypat
         ]
     ).issubset(history.columns)
     assert (tmp_path / "last.pt").exists()
-    assert (tmp_path / "best.pt").exists()
+    assert (tmp_path / "bestE.pt").exists()
+    assert (tmp_path / "bestF.pt").exists()
     assert progress_descriptions == ["Train 1/1", "Validation 1/1"]
     assert "Dataset samples: total=2, train=1, validation=1, test=0" in capsys.readouterr().out
 
@@ -422,13 +423,18 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
         model,
         config,
         epoch=1,
-        best_validation_metric=0.1,
-        is_best=True,
+        best_energy_mae=0.1,
+        best_force_mae=0.2,
+        is_best_energy=True,
+        is_best_force=True,
     )
 
     state = torch.load(tmp_path / "last.pt", map_location="cpu")
 
     assert state["model_name"] == "GPTFF"
+    assert state["best_energy_mae"] == pytest.approx(0.1)
+    assert state["best_force_mae"] == pytest.approx(0.2)
+    assert state["best_validation_metric"] == pytest.approx(0.2)
     assert state["model_config"]["num_readout_layers"] == 4
     assert state["model_config"]["readout_atom_norm"] is True
     assert "final_atom_norm" not in state["model_config"]
@@ -447,7 +453,43 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert "scaler" not in state
     assert "random_state" not in state
     assert "device" not in state["model_config"]
-    assert (tmp_path / "best.pt").exists()
+    assert (tmp_path / "bestE.pt").exists()
+    assert (tmp_path / "bestF.pt").exists()
+
+
+def test_save_checkpoint_updates_best_energy_and_force_independently(tmp_path):
+    config = TrainingConfig.from_dict(_raw_config())
+    model = torch.nn.Linear(1, 1)
+
+    save_checkpoint(
+        tmp_path,
+        model,
+        config,
+        epoch=1,
+        best_energy_mae=0.1,
+        best_force_mae=0.2,
+        is_best_energy=True,
+        is_best_force=False,
+    )
+    assert (tmp_path / "bestE.pt").exists()
+    assert not (tmp_path / "bestF.pt").exists()
+
+    save_checkpoint(
+        tmp_path,
+        model,
+        config,
+        epoch=2,
+        best_energy_mae=0.1,
+        best_force_mae=0.15,
+        is_best_energy=False,
+        is_best_force=True,
+    )
+    assert (tmp_path / "bestE.pt").exists()
+    assert (tmp_path / "bestF.pt").exists()
+
+    best_force_state = torch.load(tmp_path / "bestF.pt", map_location="cpu")
+    assert best_force_state["epoch"] == 2
+    assert best_force_state["best_force_mae"] == pytest.approx(0.15)
 
 
 def test_compute_batch_loss_requires_energy_and_force_batches():

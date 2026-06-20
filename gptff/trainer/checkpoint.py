@@ -14,18 +14,24 @@ def save_checkpoint(
     config: TrainingConfig,
     *,
     epoch: int,
-    best_validation_metric: float,
-    is_best: bool,
+    best_energy_mae: float,
+    best_force_mae: float,
+    is_best_energy: bool,
+    is_best_force: bool,
 ) -> None:
     model_state = {
         "epoch": int(epoch),
         "state_dict": model.state_dict(),
-        "best_validation_metric": float(best_validation_metric),
+        "best_energy_mae": float(best_energy_mae),
+        "best_force_mae": float(best_force_mae),
+        "best_validation_metric": float(best_force_mae),
         "training_config": config.checkpoint_dict(),
         "model_name": "GPTFF",
         "model_config": config.to_model_config().to_dict(),
     }
     current_path = output_dir / "last.pt"
     torch.save(model_state, current_path)
-    if is_best:
-        shutil.copyfile(current_path, output_dir / "best.pt")
+    if is_best_energy:
+        shutil.copyfile(current_path, output_dir / "bestE.pt")
+    if is_best_force:
+        shutil.copyfile(current_path, output_dir / "bestF.pt")
