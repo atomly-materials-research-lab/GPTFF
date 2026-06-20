@@ -373,7 +373,12 @@ def test_console_logger_prints_epoch_summary(capsys):
     assert "train_MAE(e)=0.10000" in output
     assert "train_MAE(f)=0.20000" in output
     assert "train_MAE(s)=0.300" in output
+    assert "val_MAE(e)=0.20000" in output
     assert "val_MAE(f)=0.40000" in output
+    assert "val_MAE(s)=0.600" in output
+    assert "train_loss" not in output
+    assert "val_loss" not in output
+    assert output.count("\n") == 1
 
 
 def test_composite_logger_dispatches_and_closes():

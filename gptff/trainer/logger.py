@@ -74,12 +74,10 @@ class ConsoleLogger:
         print(
             "Epoch "
             f"{record.epoch}: "
-            f"train_loss={_format_value(record.train_loss, 5)} "
-            f"val_loss={_format_value(record.val_loss, 5)}\n"
-            f"  train_MAE(e)={_format_value(record.train_energy_mae, 5)} "
+            f"train_MAE(e)={_format_value(record.train_energy_mae, 5)} "
             f"train_MAE(f)={_format_value(record.train_force_mae, 5)} "
-            f"train_MAE(s)={_format_value(record.train_stress_mae, 3)}\n"
-            f"  val_MAE(e)={_format_value(record.val_energy_mae, 5)} "
+            f"train_MAE(s)={_format_value(record.train_stress_mae, 3)} "
+            f"val_MAE(e)={_format_value(record.val_energy_mae, 5)} "
             f"val_MAE(f)={_format_value(record.val_force_mae, 5)} "
             f"val_MAE(s)={_format_value(record.val_stress_mae, 3)}",
             file=self.stream,
