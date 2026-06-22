@@ -10,6 +10,12 @@ from gptff.trainer.config import (
     WandBConfig,
     load_config,
 )
+from gptff.trainer.evaluation import (
+    EvaluationRecord,
+    build_evaluation_record,
+    format_evaluation_record,
+    write_evaluation_record,
+)
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
@@ -34,6 +40,7 @@ __all__ = [
     "ConsoleLogger",
     "DataConfig",
     "ElementReferenceConfig",
+    "EvaluationRecord",
     "EpochLogRecord",
     "LoggingConfig",
     "LossConfig",
@@ -44,11 +51,14 @@ __all__ = [
     "TrainingLoopConfig",
     "WandBConfig",
     "WandBLogger",
+    "build_evaluation_record",
     "compute_batch_loss",
+    "format_evaluation_record",
     "load_config",
     "loss_weight_active",
     "mae",
     "run_training",
     "save_checkpoint",
     "validate_required_labels",
+    "write_evaluation_record",
 ]

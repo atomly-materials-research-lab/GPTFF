@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,6 +17,7 @@ from gptff.data import (
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
 from gptff.trainer.config import load_config
+from gptff.trainer.evaluation import EvaluationRecord
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
@@ -353,6 +355,106 @@ def test_trainer_fit_writes_history_checkpoints_and_progress(tmp_path, monkeypat
     assert "Dataset samples: total=2, train=1, validation=1, test=0" in capsys.readouterr().out
 
 
+def test_trainer_fit_writes_final_test_metrics(tmp_path, monkeypatch, capsys):
+    raw_config = _raw_config()
+    raw_config["training"]["output_dir"] = str(tmp_path)
+    raw_config["training"]["epochs"] = 1
+    raw_config["training"]["stress_loss_weight"] = 0.0
+    raw_config["data"]["validation_fraction"] = 1 / 3
+    raw_config["data"]["test_fraction"] = 1 / 3
+    raw_config["data"]["cache_graphs"] = False
+    raw_config["data"]["graph_cache_size"] = None
+    config = TrainingConfig.from_dict(raw_config)
+    progress_descriptions = []
+
+    class Progress:
+        def __init__(self, iterable):
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+        def set_postfix(self, **_kwargs):
+            return None
+
+    def fake_tqdm(iterable, *, desc, **_kwargs):
+        progress_descriptions.append(desc)
+        return Progress(iterable)
+
+    monkeypatch.setattr(trainer_module, "tqdm", fake_tqdm)
+
+    Trainer(config).fit(_atomic_dataset(size=3))
+
+    metrics = json.loads((tmp_path / "test_metrics.json").read_text())
+    assert metrics["split"] == "test"
+    assert metrics["checkpoint"] == "bestF.pt"
+    assert metrics["epoch"] == 1
+    assert np.isfinite(metrics["loss"])
+    assert np.isfinite(metrics["energy_mae"])
+    assert np.isfinite(metrics["force_mae"])
+    assert metrics["stress_mae"] is None
+    assert metrics["skipped_batches"] == 0
+    assert progress_descriptions == ["Train 1/1", "Validation 1/1", "Test bestF.pt"]
+    output = capsys.readouterr().out
+    assert "Dataset samples: total=3, train=1, validation=1, test=1" in output
+    assert "test checkpoint=bestF.pt" in output
+
+
+def test_evaluate_test_set_restores_in_memory_model_state(tmp_path):
+    raw_config = _raw_config()
+    raw_config["training"]["output_dir"] = str(tmp_path)
+    config = TrainingConfig.from_dict(raw_config)
+    trainer = Trainer(config)
+    trainer.model = torch.nn.Linear(1, 1)
+    trainer.test_loader = [object()]
+    trainer.logger = CSVLogger(tmp_path)
+    trainer.model.train()
+    with torch.no_grad():
+        trainer.model.weight.fill_(2.0)
+        trainer.model.bias.fill_(3.0)
+    original_state = {
+        key: value.detach().clone() for key, value in trainer.model.state_dict().items()
+    }
+
+    checkpoint_model = torch.nn.Linear(1, 1)
+    with torch.no_grad():
+        checkpoint_model.weight.fill_(-5.0)
+        checkpoint_model.bias.fill_(-7.0)
+    torch.save(
+        {"state_dict": checkpoint_model.state_dict(), "epoch": 4},
+        tmp_path / "bestF.pt",
+    )
+    observed = []
+
+    def fake_test(*, progress_description):
+        observed.append(
+            (
+                progress_description,
+                trainer.model.weight.detach().clone(),
+                trainer.model.bias.detach().clone(),
+            )
+        )
+        trainer.model.eval()
+        return _metrics_record()
+
+    trainer.test = fake_test
+
+    record = trainer.evaluate_test_set()
+
+    assert observed[0][0] == "Test bestF.pt"
+    assert observed[0][1].item() == pytest.approx(-5.0)
+    assert observed[0][2].item() == pytest.approx(-7.0)
+    for key, value in trainer.model.state_dict().items():
+        assert torch.equal(value, original_state[key])
+    assert trainer.model.training is True
+
+    metrics = json.loads((tmp_path / "test_metrics.json").read_text())
+    assert metrics["checkpoint"] == "bestF.pt"
+    assert metrics["epoch"] == 4
+    assert record.checkpoint == "bestF.pt"
+    assert record.epoch == 4
+
+
 def test_csv_logger_appends_epoch_records(tmp_path):
     logger = CSVLogger(tmp_path)
 
@@ -362,6 +464,17 @@ def test_csv_logger_appends_epoch_records(tmp_path):
     history = pd.read_csv(tmp_path / "history.csv")
     assert history["epoch"].tolist() == [1, 2]
     assert history["val_force_mae"].tolist() == pytest.approx([0.4, 0.4])
+
+
+def test_csv_logger_writes_evaluation_records(tmp_path):
+    logger = CSVLogger(tmp_path)
+
+    logger.log_evaluation(_evaluation_record())
+
+    metrics = json.loads((tmp_path / "test_metrics.json").read_text())
+    assert metrics["split"] == "test"
+    assert metrics["checkpoint"] == "bestF.pt"
+    assert metrics["force_mae"] == pytest.approx(0.2)
 
 
 def test_console_logger_prints_epoch_summary(capsys):
@@ -382,17 +495,34 @@ def test_console_logger_prints_epoch_summary(capsys):
     assert output.count("\n") == 1
 
 
+def test_console_logger_prints_evaluation_summary(capsys):
+    logger = ConsoleLogger()
+
+    logger.log_evaluation(_evaluation_record())
+
+    output = capsys.readouterr().out
+    assert "test checkpoint=bestF.pt" in output
+    assert "MAE(e)=0.10000" in output
+    assert "MAE(f)=0.20000" in output
+    assert "MAE(s)=0.300" in output
+    assert output.count("\n") == 1
+
+
 def test_composite_logger_dispatches_and_closes():
     first = _MemoryLogger()
     second = _MemoryLogger()
     logger = CompositeLogger([first, second])
     record = _epoch_record(epoch=1)
+    evaluation_record = _evaluation_record()
 
     logger.log_epoch(record)
+    logger.log_evaluation(evaluation_record)
     logger.close()
 
     assert first.records == [record]
     assert second.records == [record]
+    assert first.evaluation_records == [evaluation_record]
+    assert second.evaluation_records == [evaluation_record]
     assert first.closed is True
     assert second.closed is True
 
@@ -594,10 +724,14 @@ def _energy_force_batch():
 class _MemoryLogger:
     def __init__(self):
         self.records = []
+        self.evaluation_records = []
         self.closed = False
 
     def log_epoch(self, record):
         self.records.append(record)
+
+    def log_evaluation(self, record):
+        self.evaluation_records.append(record)
 
     def close(self):
         self.closed = True
@@ -620,8 +754,8 @@ def _epoch_record(epoch):
     )
 
 
-def _atomic_dataset():
-    return AtomicDataset((_atomic_sample(0), _atomic_sample(1)))
+def _atomic_dataset(size=2):
+    return AtomicDataset(tuple(_atomic_sample(index) for index in range(size)))
 
 
 def _atomic_sample(index, *, stress=np.eye(3)):
@@ -649,6 +783,29 @@ def _batch_loss(value):
         force_mae=None,
         stress_mae=None,
         batch_size=1,
+    )
+
+
+def _metrics_record():
+    return SimpleNamespace(
+        loss=SimpleNamespace(avg=1.0, count=1),
+        energy_mae=SimpleNamespace(avg=0.1, count=1),
+        force_mae=SimpleNamespace(avg=0.2, count=1),
+        stress_mae=SimpleNamespace(avg=0.3, count=1),
+        skipped_batches=0,
+    )
+
+
+def _evaluation_record():
+    return EvaluationRecord(
+        split="test",
+        checkpoint="bestF.pt",
+        epoch=4,
+        loss=1.0,
+        energy_mae=0.1,
+        force_mae=0.2,
+        stress_mae=0.3,
+        skipped_batches=0,
     )
 
 

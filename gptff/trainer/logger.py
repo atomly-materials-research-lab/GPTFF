@@ -8,6 +8,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from gptff.trainer.evaluation import (
+    EvaluationRecord,
+    format_evaluation_record,
+    write_evaluation_record,
+)
+
 HISTORY_FIELDS = (
     "epoch",
     "lr",
@@ -46,6 +52,8 @@ class EpochLogRecord:
 class TrainingLogger(Protocol):
     def log_epoch(self, record: EpochLogRecord) -> None: ...
 
+    def log_evaluation(self, record: EvaluationRecord) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -61,6 +69,13 @@ class CSVLogger:
             if write_header:
                 writer.writeheader()
             writer.writerow(record.as_dict())
+
+    def log_evaluation(self, record: EvaluationRecord) -> None:
+        write_evaluation_record(
+            self.path.parent,
+            record,
+            filename=f"{record.split}_metrics.json",
+        )
 
     def close(self) -> None:
         return None
@@ -83,6 +98,9 @@ class ConsoleLogger:
             file=self.stream,
             flush=True,
         )
+
+    def log_evaluation(self, record: EvaluationRecord) -> None:
+        print(format_evaluation_record(record), file=self.stream, flush=True)
 
     def close(self) -> None:
         return None
@@ -132,6 +150,16 @@ class WandBLogger:
             return
         self._wandb.log(record.as_dict(), step=record.epoch)
 
+    def log_evaluation(self, record: EvaluationRecord) -> None:
+        if self._wandb is None:
+            return
+        payload = {
+            f"{record.split}_{key}": value
+            for key, value in record.as_dict().items()
+            if key != "split"
+        }
+        self._wandb.log(payload, step=record.epoch)
+
     def close(self) -> None:
         if self._run is not None:
             self._run.finish()
@@ -144,6 +172,10 @@ class CompositeLogger:
     def log_epoch(self, record: EpochLogRecord) -> None:
         for logger in self.loggers:
             logger.log_epoch(record)
+
+    def log_evaluation(self, record: EvaluationRecord) -> None:
+        for logger in self.loggers:
+            logger.log_evaluation(record)
 
     def close(self) -> None:
         for logger in self.loggers:

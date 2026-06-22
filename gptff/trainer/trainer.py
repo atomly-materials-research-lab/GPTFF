@@ -21,6 +21,10 @@ from gptff.data import (
 from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import TrainingConfig
+from gptff.trainer.evaluation import (
+    EvaluationRecord,
+    build_evaluation_record,
+)
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
@@ -357,6 +361,59 @@ class Trainer:
             progress_description=f"Validation {epoch}/{self.config.epochs}",
         )
 
+    def test(self, *, progress_description: str = "Test") -> EpochMetrics | None:
+        if self.test_loader is None:
+            return None
+        return validate(
+            self.test_loader,
+            self.model,
+            self.criterion,
+            self.config,
+            progress_description=progress_description,
+        )
+
+    def evaluate_test_set(
+        self,
+        *,
+        checkpoint_filename: str = "bestF.pt",
+    ) -> EvaluationRecord | None:
+        if self.test_loader is None:
+            return None
+
+        checkpoint_path = self.output_dir / checkpoint_filename
+        original_state = _clone_state_dict(self.model.state_dict())
+        original_training = self.model.training
+        checkpoint_name = None
+        checkpoint_epoch = None
+
+        try:
+            if checkpoint_path.exists():
+                state = torch.load(checkpoint_path, map_location=torch.device(self.config.device))
+                self.model.load_state_dict(state["state_dict"])
+                checkpoint_name = checkpoint_filename
+                checkpoint_epoch = int(state["epoch"]) if "epoch" in state else None
+
+            test_metrics = self.test(
+                progress_description=f"Test {checkpoint_name or 'current'}",
+            )
+        finally:
+            self.model.load_state_dict(original_state)
+            self.model.train(original_training)
+
+        record = build_evaluation_record(
+            split="test",
+            checkpoint=checkpoint_name,
+            epoch=checkpoint_epoch,
+            loss=_meter_avg_or_nan(test_metrics.loss),
+            energy_mae=_meter_avg_or_nan(test_metrics.energy_mae),
+            force_mae=_meter_avg_or_nan(test_metrics.force_mae),
+            stress_mae=_meter_avg_or_nan(test_metrics.stress_mae),
+            skipped_batches=test_metrics.skipped_batches,
+        )
+        if self.logger is not None:
+            self.logger.log_evaluation(record)
+        return record
+
     def fit(self, dataset: AtomicDataset | None = None) -> float:
         self.setup(dataset)
 
@@ -397,6 +454,7 @@ class Trainer:
                     is_best_energy=is_best_energy,
                     is_best_force=is_best_force,
                 )
+            self.evaluate_test_set()
         finally:
             self.logger.close()
 
@@ -408,3 +466,7 @@ def run_training(
     dataset: AtomicDataset | None = None,
 ) -> float:
     return Trainer(config).fit(dataset)
+
+
+def _clone_state_dict(state_dict):
+    return {key: value.detach().cpu().clone() for key, value in state_dict.items()}
