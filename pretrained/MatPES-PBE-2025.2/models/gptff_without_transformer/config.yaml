@@ -2,8 +2,8 @@ model:
   atom_feature_dim: 64
   edge_feature_dim: 64
   num_interaction_blocks: 3
-  num_radial: 6
-  num_angular: 6
+  num_radial: 9
+  num_angular: 9
   radial_cutoff: 5.0
   angle_cutoff: 4.0
   cutoff_coeff: 5
@@ -36,7 +36,7 @@ optimizer:
 training:
   epochs: 100
   batch_size: 128
-  num_workers: 4
+  num_workers: 8
   device: cuda
   amp: false
   output_dir: runs
@@ -65,8 +65,8 @@ logging:
 
 data:
   dataset_path: data/MatPES-PBE-2025.2.gptff.json
-  validation_fraction: 0.1
-  test_fraction: 0.1
+  validation_fraction: 0.05
+  test_fraction: 0.05
   split_seed: 42
   group_by_material: false
   cache_graphs: false
