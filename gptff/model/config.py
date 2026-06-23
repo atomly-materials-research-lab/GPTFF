@@ -6,47 +6,14 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class EdgeDegreeConfig:
-    enabled: bool = True
-    rescale: str = "sqrt_mean"
-
-    def __post_init__(self) -> None:
-        if self.rescale not in {"sqrt_mean", "none"}:
-            raise ValueError("atom_attention.edge_degree.rescale must be 'sqrt_mean' or 'none'.")
-
-    @classmethod
-    def from_dict(cls, raw_config: Any) -> EdgeDegreeConfig:
-        if isinstance(raw_config, cls):
-            return raw_config
-        if raw_config is None:
-            return cls()
-        if isinstance(raw_config, bool):
-            return cls(enabled=raw_config)
-        if isinstance(raw_config, str):
-            return cls(rescale=raw_config)
-        if not isinstance(raw_config, Mapping):
-            raise TypeError("atom_attention.edge_degree must be a mapping, boolean, string, or null.")
-        return cls(
-            enabled=bool(raw_config.get("enabled", True)),
-            rescale=str(raw_config.get("rescale", "sqrt_mean")),
-        )
-
-
-@dataclass(frozen=True)
 class AtomAttentionConfig:
-    enabled: bool = False
+    enabled: bool = True
     num_heads: int = 4
     dropout: float = 0.0
     use_ffn: bool = True
     ffn_hidden_dim: int | None = None
-    edge_degree: EdgeDegreeConfig = field(default_factory=EdgeDegreeConfig)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "edge_degree",
-            EdgeDegreeConfig.from_dict(self.edge_degree),
-        )
         if self.num_heads <= 0:
             raise ValueError("atom_attention.num_heads must be positive.")
         if self.dropout < 0 or self.dropout >= 1:
@@ -65,12 +32,11 @@ class AtomAttentionConfig:
         if not isinstance(raw_config, Mapping):
             raise TypeError("atom_attention must be a mapping, boolean, or null.")
         return cls(
-            enabled=bool(raw_config.get("enabled", False)),
+            enabled=bool(raw_config.get("enabled", True)),
             num_heads=int(raw_config.get("num_heads", 4)),
             dropout=float(raw_config.get("dropout", 0.0)),
             use_ffn=bool(raw_config.get("use_ffn", True)),
             ffn_hidden_dim=_optional_int(raw_config.get("ffn_hidden_dim", None)),
-            edge_degree=EdgeDegreeConfig.from_dict(raw_config.get("edge_degree", None)),
         )
 
 
@@ -119,6 +85,11 @@ class GPTFFConfig:
             raise ValueError("num_readout_layers must be positive.")
         if self.interaction_dropout < 0 or self.interaction_dropout >= 1:
             raise ValueError("interaction_dropout must be in the range [0, 1).")
+        if (
+            self.atom_attention.enabled
+            and self.atom_feature_dim % self.atom_attention.num_heads != 0
+        ):
+            raise ValueError("atom_feature_dim must be divisible by atom_attention.num_heads.")
 
     @classmethod
     def from_dict(cls, raw_config: Mapping[str, Any]) -> GPTFFConfig:

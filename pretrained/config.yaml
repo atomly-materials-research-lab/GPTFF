@@ -12,14 +12,11 @@ model:
   readout_atom_norm: true
   interaction_dropout: 0.0
   atom_attention:
-    enabled: false
+    enabled: true
     num_heads: 4
     dropout: 0.0
     use_ffn: true
     ffn_hidden_dim: null
-    edge_degree:
-      enabled: true
-      rescale: sqrt_mean
 
 element_references:
   source: atomly

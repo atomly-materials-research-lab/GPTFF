@@ -7,9 +7,10 @@ name = "GPTFF"
 version = "0.0.1"
 description = "Graph-based Pretrained Transformer Force Field."
 authors = [
-    {name = "Fankai Xie", email = "fankaixiee@gmail.com"},
-    {name = "Tenglong Lu", email = "lutenglongg@gmail.com"}
+    { name = "Fankai Xie", email = "fankaixiee@gmail.com" },
+    { name = "Tenglong Lu", email = "lutenglongg@gmail.com" },
 ]
+maintainers = [{ name = "Tenglong Lu", email = "lutenglongg@gmail.com" }]
 requires-python = ">=3.10"
 
 dependencies = [
