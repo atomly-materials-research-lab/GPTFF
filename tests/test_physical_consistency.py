@@ -56,33 +56,60 @@ def test_gptff_rigid_translation_and_rotation_consistency(atom_attention):
     )
 
 
-def test_gptff_atom_permutation_invariance():
-    model = _build_model()
+@pytest.mark.parametrize("atom_attention", [False, True], ids=["message-passing", "attention"])
+def test_gptff_atom_permutation_invariance_in_batch(atom_attention):
+    model = _build_model(atom_attention=atom_attention)
     structure = _reference_structure()
-    permutation = np.array([2, 0, 3, 1])
-
-    permuted = Structure(
+    translated = Structure(
         structure.lattice,
-        [structure[index].specie for index in permutation],
-        structure.cart_coords[permutation],
+        structure.species,
+        structure.cart_coords + np.array([-0.19, 0.27, 0.11]),
         coords_are_cartesian=True,
     )
+    first_permutation = np.array([2, 0, 3, 1])
+    second_permutation = np.array([1, 3, 0, 2])
 
-    energy, forces, stress = _predict(model, structure)
-    permuted_energy, permuted_forces, permuted_stress = _predict(model, permuted)
+    batch = _batch([structure, translated])
+    permuted_batch = _batch(
+        [
+            _permute_structure(structure, first_permutation),
+            _permute_structure(translated, second_permutation),
+        ]
+    )
+
+    energy, forces, stress = predict_energy_forces_stress(
+        model,
+        batch,
+        create_graph=False,
+        compute_stress=True,
+    )
+    permuted_energy, permuted_forces, permuted_stress = predict_energy_forces_stress(
+        model,
+        permuted_batch,
+        create_graph=False,
+        compute_stress=True,
+    )
+    expected_forces = torch.cat(
+        [
+            forces[:4][torch.tensor(first_permutation)],
+            forces[4:][torch.tensor(second_permutation)],
+        ],
+        dim=0,
+    )
 
     assert torch.allclose(permuted_energy, energy, rtol=1e-6, atol=1e-7)
     assert torch.allclose(
         permuted_forces,
-        forces[torch.tensor(permutation)],
+        expected_forces,
         rtol=1e-5,
         atol=1e-6,
     )
     assert torch.allclose(permuted_stress, stress, rtol=1e-5, atol=1e-6)
 
 
-def test_gptff_periodic_site_representation_invariance():
-    model = _build_model()
+@pytest.mark.parametrize("atom_attention", [False, True], ids=["message-passing", "attention"])
+def test_gptff_periodic_site_representation_invariance(atom_attention):
+    model = _build_model(atom_attention=atom_attention)
     structure = _reference_structure()
     shifted_fractional_coords = structure.frac_coords.copy()
     shifted_fractional_coords[1] += np.array([1.0, -1.0, 0.0])
@@ -100,8 +127,9 @@ def test_gptff_periodic_site_representation_invariance():
     assert torch.allclose(shifted_stress, stress, rtol=1e-5, atol=1e-6)
 
 
-def test_gptff_net_force_is_zero_per_structure_in_batch():
-    model = _build_model()
+@pytest.mark.parametrize("atom_attention", [False, True], ids=["message-passing", "attention"])
+def test_gptff_net_force_is_zero_per_structure_in_batch(atom_attention):
+    model = _build_model(atom_attention=atom_attention)
     structure = _reference_structure()
     translated = Structure(
         structure.lattice,
@@ -127,6 +155,55 @@ def test_gptff_net_force_is_zero_per_structure_in_batch():
             atol=1e-9,
         )
         atom_offset += atom_count
+
+
+@pytest.mark.parametrize("atom_attention", [False, True], ids=["message-passing", "attention"])
+def test_gptff_reflection_consistency(atom_attention):
+    model = _build_model(atom_attention=atom_attention)
+    structure = _reference_structure()
+    energy, forces, stress = _predict(model, structure)
+
+    reflection = np.diag([-1.0, 1.0, 1.0])
+    reflected = Structure(
+        Lattice(structure.lattice.matrix @ reflection.T),
+        structure.species,
+        structure.cart_coords @ reflection.T,
+        coords_are_cartesian=True,
+    )
+    reflected_energy, reflected_forces, reflected_stress = _predict(model, reflected)
+    reflection_tensor = torch.tensor(reflection, dtype=forces.dtype)
+
+    assert torch.allclose(reflected_energy, energy, rtol=1e-6, atol=1e-7)
+    assert torch.allclose(
+        reflected_forces,
+        forces @ reflection_tensor.T,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert torch.allclose(
+        reflected_stress,
+        reflection_tensor @ stress @ reflection_tensor.T,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("atom_attention", [False, True], ids=["message-passing", "attention"])
+def test_gptff_force_is_finite_and_small_near_radial_cutoff(atom_attention):
+    model = _build_model(atom_attention=atom_attention, radial_cutoff=RADIAL_CUTOFF)
+    inside = _two_atom_distance_structure(RADIAL_CUTOFF - 1e-4)
+    outside = _two_atom_distance_structure(RADIAL_CUTOFF + 1e-4)
+
+    inside_energy, inside_forces, _ = _predict(model, inside, compute_stress=False)
+    outside_energy, outside_forces, _ = _predict(model, outside, compute_stress=False)
+
+    assert torch.isfinite(inside_energy).all()
+    assert torch.isfinite(outside_energy).all()
+    assert torch.isfinite(inside_forces).all()
+    assert torch.isfinite(outside_forces).all()
+    assert torch.allclose(inside_energy, outside_energy, rtol=0.0, atol=1e-4)
+    assert inside_forces.abs().max().item() < 1e-2
+    assert outside_forces.abs().max().item() < 1e-10
 
 
 def test_full_gptff_force_matches_position_finite_difference():
@@ -183,7 +260,7 @@ def test_full_gptff_stress_matches_strain_finite_difference(component):
     )
 
 
-def _build_model(*, atom_attention=False):
+def _build_model(*, atom_attention=False, radial_cutoff=RADIAL_CUTOFF):
     torch.manual_seed(19)
     return (
         GPTFF(
@@ -193,7 +270,7 @@ def _build_model(*, atom_attention=False):
                 num_interaction_blocks=1,
                 num_radial=6,
                 num_angular=5,
-                radial_cutoff=RADIAL_CUTOFF,
+                radial_cutoff=radial_cutoff,
                 angle_cutoff=ANGLE_CUTOFF,
                 num_readout_layers=2,
                 atom_attention={
@@ -229,6 +306,24 @@ def _reference_structure():
     )
 
 
+def _permute_structure(structure, permutation):
+    return Structure(
+        structure.lattice,
+        [structure[index].specie for index in permutation],
+        structure.cart_coords[permutation],
+        coords_are_cartesian=True,
+    )
+
+
+def _two_atom_distance_structure(distance):
+    return Structure(
+        Lattice.cubic(12.0),
+        ["Na", "Cl"],
+        [[0.0, 0.0, 0.0], [distance, 0.0, 0.0]],
+        coords_are_cartesian=True,
+    )
+
+
 def _rotation_matrix(*, axis, angle):
     axis = np.asarray(axis, dtype=np.float64)
     axis /= np.linalg.norm(axis)
@@ -248,12 +343,12 @@ def _rotation_matrix(*, axis, angle):
     )
 
 
-def _predict(model, structure):
+def _predict(model, structure, *, compute_stress=True):
     return predict_energy_forces_stress(
         model,
         _batch([structure]),
         create_graph=False,
-        compute_stress=True,
+        compute_stress=compute_stress,
     )
 
 
