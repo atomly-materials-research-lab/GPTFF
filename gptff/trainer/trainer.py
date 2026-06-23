@@ -96,18 +96,46 @@ def count_parameters(model: torch.nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+def build_weight_decay_param_groups(
+    model: torch.nn.Module,
+    weight_decay: float,
+) -> list[dict[str, object]]:
+    decay_params = []
+    no_decay_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if _exclude_from_weight_decay(name, param):
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    if weight_decay == 0:
+        return [{"params": decay_params + no_decay_params, "weight_decay": 0.0}]
+
+    param_groups: list[dict[str, object]] = []
+    if decay_params:
+        param_groups.append({"params": decay_params, "weight_decay": weight_decay})
+    if no_decay_params:
+        param_groups.append({"params": no_decay_params, "weight_decay": 0.0})
+    return param_groups
+
+
+def _exclude_from_weight_decay(name: str, param: torch.nn.Parameter) -> bool:
+    return name.endswith(".bias") or param.ndim == 1 or "residual_scale" in name
+
+
 def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Optimizer:
     optimizer_name = config.optimizer_name.lower()
+    param_groups = build_weight_decay_param_groups(model, config.weight_decay)
     if optimizer_name == "adam":
-        return optim.Adam(model.parameters(), config.lr, weight_decay=config.weight_decay)
+        return optim.Adam(param_groups, config.lr)
     if optimizer_name == "adamw":
-        return optim.AdamW(model.parameters(), config.lr, weight_decay=config.weight_decay)
+        return optim.AdamW(param_groups, config.lr)
     if optimizer_name == "radam":
-        return optim.RAdam(model.parameters(), config.lr, weight_decay=config.weight_decay)
+        return optim.RAdam(param_groups, config.lr)
     if optimizer_name == "sgd":
-        return optim.SGD(
-            model.parameters(), config.lr, momentum=0.9, weight_decay=config.weight_decay
-        )
+        return optim.SGD(param_groups, config.lr, momentum=0.9)
     raise ValueError(f"Unsupported optimizer: {config.optimizer_name}")
 
 

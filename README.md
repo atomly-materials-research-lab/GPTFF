@@ -251,7 +251,7 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `num_readout_layers`: Number of linear layers in the atom-wise energy readout
 - `readout_atom_norm`: If true, apply LayerNorm to atom features before the energy readout
 - `interaction_dropout`: Dropout probability inside interaction blocks
-- `atom_attention`: Cutoff-aware invariant atom attention mixer. It is enabled by default. `num_heads`, `dropout`, `use_ffn`, and `ffn_hidden_dim` control the residual attention branch after atom update. When enabled, GPTFF automatically adds a sum-aggregated radial density residual before attention; when disabled, this residual is not constructed.
+- `atom_attention`: Cutoff-aware invariant atom attention mixer. It is enabled by default. `num_heads`, `dropout`, `use_ffn`, and `ffn_hidden_dim` control the residual attention branch after atom update. When enabled, GPTFF uses sum-aggregated radial density features to scale the attention residual; `density_scale_init`, `residual_scale_init`, and `ffn_residual_scale_init` control the initial strength of the density scale, attention residual, and optional FFN residual.
 
 `element_references`:
 - `source`: Elemental reference energy source. Use `"atomly"`, `"fit"`, `null`, a mapping, a list, or a YAML/JSON file path. Mapping keys must be atomic numbers.

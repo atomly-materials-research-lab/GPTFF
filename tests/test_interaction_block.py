@@ -7,9 +7,10 @@ from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFF, GPTFFConfig
 from gptff.model.encoders import EdgeModulation, GeometryFeatures
 from gptff.model.layers import (
+    DensityAttentionScale,
     InteractionBlock,
     InvariantAtomAttention,
-    RadialDensityEmbedding,
+    RadialDensityFeatures,
     cutoff_weighted_softmax,
     sum_aggregation,
 )
@@ -88,13 +89,12 @@ def test_default_model_uses_interaction_blocks():
     assert not hasattr(model.interactions[0], "atom_edge_norm")
     assert not hasattr(model.interactions[0], "residual_zero_init")
     assert not hasattr(model.interactions[0].edge_update, "message_projection")
-    assert model.interactions[0].radial_density_embedding is None
+    assert model.interactions[0].radial_density_features is None
     assert model.interactions[0].atom_attention is None
+    assert model.interactions[0].attention_density_scale is None
     assert model.interactions[0].attention_ffn is None
-    assert model.interactions[0].radial_density_norm is None
     assert model.interactions[0].attention_norm is None
     assert model.interactions[0].attention_ffn_norm is None
-    assert model.interactions[0].radial_density_residual_scale is None
     assert model.interactions[0].attention_residual_scale is None
     assert model.interactions[0].attention_ffn_residual_scale is None
 
@@ -242,6 +242,8 @@ def test_interaction_block_can_enable_atom_attention():
             "num_heads": 2,
             "dropout": 0.0,
             "use_ffn": True,
+            "residual_scale_init": 0.04,
+            "ffn_residual_scale_init": 0.05,
         },
     )
     model = GPTFF(cfg)
@@ -255,19 +257,16 @@ def test_interaction_block_can_enable_atom_attention():
         features,
     )
 
-    assert isinstance(model.interactions[0].radial_density_embedding, RadialDensityEmbedding)
+    assert isinstance(model.interactions[0].radial_density_features, RadialDensityFeatures)
     assert isinstance(model.interactions[0].atom_attention, InvariantAtomAttention)
-    assert torch.allclose(
-        model.interactions[0].radial_density_residual_scale,
-        torch.tensor(1e-2),
-    )
+    assert isinstance(model.interactions[0].attention_density_scale, DensityAttentionScale)
     assert torch.allclose(
         model.interactions[0].attention_residual_scale,
-        torch.tensor(1e-2),
+        torch.tensor(0.04),
     )
     assert torch.allclose(
         model.interactions[0].attention_ffn_residual_scale,
-        torch.tensor(1e-2),
+        torch.tensor(0.05),
     )
     assert atom_out.shape == atom_fea.shape
     assert edge_out.shape == features.edge_features.shape
@@ -284,8 +283,9 @@ def test_interaction_block_enables_radial_density_with_atom_attention():
     )
     model = GPTFF(cfg)
 
-    assert isinstance(model.interactions[0].radial_density_embedding, RadialDensityEmbedding)
+    assert isinstance(model.interactions[0].radial_density_features, RadialDensityFeatures)
     assert isinstance(model.interactions[0].atom_attention, InvariantAtomAttention)
+    assert isinstance(model.interactions[0].attention_density_scale, DensityAttentionScale)
 
 
 def test_attention_residual_scales_gate_new_branches():
@@ -303,10 +303,10 @@ def test_attention_residual_scales_gate_new_branches():
     block.three_body = _ConstantTripletDelta(value=0.0)
     block.edge_update = _ConstantPairDelta(value=0.0)
     block.atom_update = _ConstantAtomDelta(value=0.0)
-    block.radial_density_embedding = _ConstantAtomDelta(value=2.0)
+    block.radial_density_features = _ConstantDensityFeatures(value=2.0)
     block.atom_attention = _ConstantAttentionDelta(value=3.0)
+    block.attention_density_scale = _ConstantAttentionScale(scale=4.0)
     block.attention_ffn = _ConstantFeature(output_dim=model.atom_feature_dim, value=5.0)
-    block.radial_density_residual_scale.data.fill_(0.1)
     block.attention_residual_scale.data.fill_(0.2)
     block.attention_ffn_residual_scale.data.fill_(0.3)
 
@@ -326,7 +326,7 @@ def test_attention_residual_scales_gate_new_branches():
 
     atom_out, _ = block(atom_fea, edge_ij, graph, features)
 
-    expected_value = 0.1 * 2.0 + 0.2 * 3.0 + 0.3 * 5.0
+    expected_value = 0.2 * (3.0 * 4.0) + 0.3 * 5.0
     assert torch.allclose(atom_out, torch.full_like(atom_fea, expected_value))
 
 
@@ -431,58 +431,84 @@ def test_atom_update_uses_sum_aggregation():
     assert torch.equal(atom_delta, expected)
 
 
-def test_radial_density_embedding_uses_sum_aggregation():
+def test_radial_density_features_use_sum_aggregation():
     graph = _batch()
     model = GPTFF(_cfg())
-    radial_density = RadialDensityEmbedding(
+    radial_density = RadialDensityFeatures(
         atom_feature_dim=model.atom_feature_dim,
         num_radial=model.num_radial,
-        rescale="none",
     )
     radial_density.radial_density.weight.data.fill_(1.0)
-    radial_density.density_context.weight.data.zero_()
-    radial_density.density_context.weight.data[:, 0] = 1.0
-    radial_density.atom_gate.weight.data.zero_()
-    radial_density.atom_gate.bias.data.zero_()
-    radial_density.output.weight.data.copy_(torch.eye(model.atom_feature_dim))
 
     atom_fea = torch.zeros((graph.atom_types.shape[0], model.atom_feature_dim))
     edge_basis = torch.ones((graph.edge_index.shape[1], model.num_radial))
     edge_cutoff = torch.ones((graph.edge_index.shape[1], 1))
 
-    delta = radial_density(
+    density_features = radial_density(
         atom_fea,
         graph,
         edge_basis,
         edge_cutoff,
     )
-    expected = torch.zeros_like(atom_fea)
-    expected.index_add_(0, graph.edge_index[0], edge_cutoff.expand_as(atom_fea[graph.edge_index[0]]))
-    expected = torch.nn.functional.silu(expected) * 0.5
+    expected_degree = torch.zeros((atom_fea.shape[0], 1))
+    expected_degree.index_add_(0, graph.edge_index[0], edge_cutoff)
+    expected_radial = torch.zeros_like(atom_fea)
+    expected_radial.index_add_(
+        0,
+        graph.edge_index[0],
+        torch.full_like(atom_fea[graph.edge_index[0]], float(model.num_radial)),
+    )
+    expected = torch.cat([expected_degree, expected_radial], dim=-1)
 
-    assert torch.allclose(delta, expected)
+    assert torch.allclose(density_features, expected)
 
 
-def test_radial_density_embedding_returns_zero_with_zero_cutoff_inputs():
+def test_radial_density_features_return_zero_with_zero_cutoff_inputs():
     graph = _batch()
     model = GPTFF(_cfg())
-    radial_density = RadialDensityEmbedding(
+    radial_density = RadialDensityFeatures(
         atom_feature_dim=model.atom_feature_dim,
         num_radial=model.num_radial,
-        rescale="none",
     )
 
     atom_fea = model.atom_embedding(graph.atom_types)
     edge_basis = torch.zeros((graph.edge_index.shape[1], model.num_radial))
 
-    delta = radial_density(
+    density_features = radial_density(
         atom_fea,
         graph,
         edge_basis,
         torch.zeros((graph.edge_index.shape[1], 1)),
     )
 
-    assert torch.equal(delta, torch.zeros_like(atom_fea))
+    assert torch.equal(density_features, atom_fea.new_zeros((atom_fea.shape[0], atom_fea.shape[1] + 1)))
+
+
+def test_density_attention_scale_is_identity_for_zero_density():
+    scale = DensityAttentionScale(
+        density_feature_dim=9,
+        atom_feature_dim=8,
+        scale_init=0.1,
+    )
+    attention_delta = torch.randn(3, 8)
+    density_features = torch.zeros(3, 9)
+
+    scaled_delta = scale(attention_delta, density_features)
+
+    assert torch.equal(scaled_delta, attention_delta)
+
+
+def test_density_attention_scale_initial_deviation_is_bounded():
+    scale = DensityAttentionScale(
+        density_feature_dim=9,
+        atom_feature_dim=8,
+        scale_init=0.1,
+    )
+    density_features = torch.randn(5, 9)
+
+    density_scale = scale.compute_scale(density_features)
+
+    assert torch.max(torch.abs(density_scale - 1.0)) <= 0.1
 
 
 def test_three_body_update_uses_sum_aggregation():
@@ -658,6 +684,24 @@ class _ConstantAttentionDelta(nn.Module):
 
     def forward(self, atom_fea, edge_ij, graph, edge_basis, edge_cutoff, edge_modulation):
         return torch.full_like(atom_fea, self.value)
+
+
+class _ConstantDensityFeatures(nn.Module):
+    def __init__(self, value):
+        super().__init__()
+        self.value = float(value)
+
+    def forward(self, atom_fea, graph, edge_basis, edge_cutoff):
+        return atom_fea.new_full((atom_fea.shape[0], atom_fea.shape[1] + 1), self.value)
+
+
+class _ConstantAttentionScale(nn.Module):
+    def __init__(self, scale):
+        super().__init__()
+        self.scale = float(scale)
+
+    def forward(self, attention_delta, density_features):
+        return attention_delta * self.scale
 
 
 class _ConstantFeature(nn.Module):

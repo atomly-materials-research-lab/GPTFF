@@ -16,6 +16,7 @@ from gptff.data import (
 )
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
+from gptff.model.model import GPTFF
 from gptff.trainer.config import load_config
 from gptff.trainer.evaluation import EvaluationRecord
 from gptff.trainer.logger import (
@@ -29,6 +30,7 @@ from gptff.trainer.loss import BatchLoss
 from gptff.trainer.trainer import (
     Trainer,
     TrainingConfig,
+    build_optimizer,
     compute_batch_loss,
     has_nonfinite_loss,
     save_checkpoint,
@@ -58,6 +60,9 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.readout_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.model.atom_attention.enabled is True
+    assert config.model.atom_attention.density_scale_init == pytest.approx(0.1)
+    assert config.model.atom_attention.residual_scale_init == pytest.approx(1e-2)
+    assert config.model.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert config.amp is False
     assert config.seed == 42
     assert config.deterministic is True
@@ -220,6 +225,39 @@ def test_training_config_uses_optimizer_specific_weight_decay_defaults():
     assert config.optimizer.weight_decay == pytest.approx(0.0)
 
 
+def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
+    raw_config = _raw_config()
+    raw_config["optimizer"] = {
+        "name": "AdamW",
+        "learning_rate": 1e-3,
+        "weight_decay": 1e-2,
+    }
+    config = TrainingConfig.from_dict(raw_config)
+    model = GPTFF(config.to_model_config())
+
+    optimizer = build_optimizer(model, config)
+
+    assert len(optimizer.param_groups) == 2
+    decay_group = next(group for group in optimizer.param_groups if group["weight_decay"] == 1e-2)
+    no_decay_group = next(group for group in optimizer.param_groups if group["weight_decay"] == 0.0)
+    decay_param_ids = {id(param) for param in decay_group["params"]}
+    no_decay_param_ids = {id(param) for param in no_decay_group["params"]}
+    named_params = dict(model.named_parameters())
+    trainable_param_ids = {id(param) for param in model.parameters() if param.requires_grad}
+
+    assert id(named_params["interactions.0.attention_residual_scale"]) in no_decay_param_ids
+    assert id(named_params["interactions.0.attention_ffn_residual_scale"]) in no_decay_param_ids
+    assert (
+        id(named_params["interactions.0.attention_density_scale.residual_scale"])
+        in no_decay_param_ids
+    )
+    assert id(named_params["interactions.0.atom_norm.weight"]) in no_decay_param_ids
+    assert id(named_params["interactions.0.edge_update.message_gate.value.bias"]) in no_decay_param_ids
+    assert id(named_params["interactions.0.edge_update.message_gate.value.weight"]) in decay_param_ids
+    assert decay_param_ids.isdisjoint(no_decay_param_ids)
+    assert decay_param_ids | no_decay_param_ids == trainable_param_ids
+
+
 def test_training_config_disables_graph_cache_by_default():
     raw_config = _raw_config()
     raw_config["data"].pop("cache_graphs")
@@ -283,6 +321,9 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.readout_atom_norm is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
     assert model_config.atom_attention.enabled is True
+    assert model_config.atom_attention.density_scale_init == pytest.approx(0.1)
+    assert model_config.atom_attention.residual_scale_init == pytest.approx(1e-2)
+    assert model_config.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert model_config.element_refs == "atomly"
     assert "batch_size" not in model_config.to_dict()
     assert "device" not in model_config.to_dict()
@@ -570,6 +611,11 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert "final_atom_norm" not in state["model_config"]
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["atom_attention"]["enabled"] is True
+    assert state["model_config"]["atom_attention"]["density_scale_init"] == pytest.approx(0.1)
+    assert state["model_config"]["atom_attention"]["residual_scale_init"] == pytest.approx(1e-2)
+    assert state["model_config"]["atom_attention"]["ffn_residual_scale_init"] == pytest.approx(
+        1e-2
+    )
     assert "readout_zero_init" not in state["model_config"]
     assert "residual_zero_init" not in state["model_config"]
     assert "cfg" not in state
@@ -889,6 +935,9 @@ def _canonical_config():
                 "dropout": 0.0,
                 "use_ffn": True,
                 "ffn_hidden_dim": None,
+                "density_scale_init": 0.1,
+                "residual_scale_init": 1e-2,
+                "ffn_residual_scale_init": 1e-2,
             },
         },
         "optimizer": {

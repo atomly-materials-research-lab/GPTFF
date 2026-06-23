@@ -12,6 +12,9 @@ class AtomAttentionConfig:
     dropout: float = 0.0
     use_ffn: bool = True
     ffn_hidden_dim: int | None = None
+    density_scale_init: float = 0.1
+    residual_scale_init: float = 1e-2
+    ffn_residual_scale_init: float = 1e-2
 
     def __post_init__(self) -> None:
         if self.num_heads <= 0:
@@ -20,6 +23,12 @@ class AtomAttentionConfig:
             raise ValueError("atom_attention.dropout must be in the range [0, 1).")
         if self.ffn_hidden_dim is not None and self.ffn_hidden_dim <= 0:
             raise ValueError("atom_attention.ffn_hidden_dim must be positive or null.")
+        if self.density_scale_init < 0:
+            raise ValueError("atom_attention.density_scale_init must be non-negative.")
+        if self.residual_scale_init < 0:
+            raise ValueError("atom_attention.residual_scale_init must be non-negative.")
+        if self.ffn_residual_scale_init < 0:
+            raise ValueError("atom_attention.ffn_residual_scale_init must be non-negative.")
 
     @classmethod
     def from_dict(cls, raw_config: Any) -> AtomAttentionConfig:
@@ -37,6 +46,9 @@ class AtomAttentionConfig:
             dropout=float(raw_config.get("dropout", 0.0)),
             use_ffn=bool(raw_config.get("use_ffn", True)),
             ffn_hidden_dim=_optional_int(raw_config.get("ffn_hidden_dim", None)),
+            density_scale_init=float(raw_config.get("density_scale_init", 0.1)),
+            residual_scale_init=float(raw_config.get("residual_scale_init", 1e-2)),
+            ffn_residual_scale_init=float(raw_config.get("ffn_residual_scale_init", 1e-2)),
         )
 
 
