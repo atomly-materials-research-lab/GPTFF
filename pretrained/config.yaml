@@ -22,7 +22,7 @@ model:
     ffn_residual_scale_init: 0.01
 
 element_references:
-  source: atomly
+  source: null
   ridge: 0.0
 
 optimizer:

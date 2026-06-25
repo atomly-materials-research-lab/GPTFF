@@ -5,7 +5,6 @@ import torch
 from gptff.graph import CrystalGraph, GraphSample
 from gptff.model.readout import (
     EnergyHead,
-    available_element_ref_presets,
     build_element_ref_tensor,
     fit_element_refs_from_samples,
 )
@@ -94,26 +93,8 @@ def test_energy_head_accepts_one_indexed_reference_sequence():
     assert torch.allclose(head.element_refs, torch.tensor([0.0, -1.0, 0.0, 2.0]))
 
 
-def test_energy_head_accepts_named_element_reference_preset():
-    head = EnergyHead(atom_feature_dim=4, max_atomic_number=3, element_refs="atomly")
-    for param in head.parameters():
-        torch.nn.init.zeros_(param)
-
-    atom_fea = torch.zeros(3, 4)
-    atom_types = torch.tensor([1, 2, 3], dtype=torch.long)
-    atom_batch = torch.tensor([0, 0, 1], dtype=torch.long)
-
-    energy = head(atom_fea, atom_types, atom_batch, num_graphs=2)
-
-    assert "atomly" in available_element_ref_presets()
-    assert torch.allclose(
-        energy.squeeze(-1),
-        torch.tensor([-4.22146044, -3.46224791]),
-    )
-
-
-def test_unknown_named_element_reference_preset_lists_available_presets():
-    with pytest.raises(ValueError, match="Available presets: atomly"):
+def test_energy_head_rejects_named_element_reference_preset():
+    with pytest.raises(TypeError, match="no longer accepts named presets"):
         build_element_ref_tensor("missing", max_atomic_number=94)
 
 

@@ -53,9 +53,9 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.group_by_material is False
     assert config.cache_graphs is True
     assert config.graph_cache_size == 16
-    assert config.element_references.source == "atomly"
+    assert config.element_references.source == {"1": -1.0, "3": 2.0}
     assert config.element_references.ridge == pytest.approx(0.0)
-    assert config.element_refs == "atomly"
+    assert config.element_refs == {"1": -1.0, "3": 2.0}
     assert config.num_readout_layers == 4
     assert config.readout_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
@@ -70,8 +70,8 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
-    assert checkpoint_config["model"]["element_refs"] == "atomly"
-    assert checkpoint_config["element_references"]["source"] == "atomly"
+    assert checkpoint_config["model"]["element_refs"] == {"1": -1.0, "3": 2.0}
+    assert checkpoint_config["element_references"]["source"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
     assert checkpoint_config["optimizer"]["learning_rate"] == pytest.approx(1e-3)
     assert checkpoint_config["training"]["batch_size"] == 4
@@ -324,7 +324,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.atom_attention.density_scale_init == pytest.approx(0.1)
     assert model_config.atom_attention.residual_scale_init == pytest.approx(1e-2)
     assert model_config.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
-    assert model_config.element_refs == "atomly"
+    assert model_config.element_refs == {"1": -1.0, "3": 2.0}
     assert "batch_size" not in model_config.to_dict()
     assert "device" not in model_config.to_dict()
     assert "readout_zero_init" not in model_config.to_dict()
@@ -579,7 +579,7 @@ def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():
     raw_config = _raw_config()
     raw_config["element_references"] = {"source": "fit", "ridge": 0.0}
     config = TrainingConfig.from_dict(raw_config)
-    config.element_refs = "atomly"
+    config.element_refs = {"1": -1.0}
 
     with pytest.raises(ValueError, match="source='fit'"):
         apply_fitted_element_refs(config, [_sample([1], -1.0)])
@@ -896,7 +896,7 @@ def _raw_config():
             "stress_loss_weight": 1.0,
         },
         "element_references": {
-            "source": "atomly",
+            "source": {"1": -1.0, "3": 2.0},
             "ridge": 0.0,
         },
         "data": {
