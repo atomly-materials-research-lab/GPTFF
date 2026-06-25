@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from pymatgen.core import Structure
+from tqdm.auto import tqdm
 
 from gptff.data import AtomicDataset, AtomicSample
 
@@ -123,39 +124,48 @@ def main() -> None:
     skipped = 0
     materials_seen = 0
 
-    for material_id, frames in iter_mptrj_materials(args.input):
-        materials_seen += 1
-        if args.max_materials is not None and materials_seen > args.max_materials:
-            break
-        if not isinstance(frames, Mapping):
-            raise TypeError(f"MPtrj material {material_id!r} must contain a frame mapping.")
+    with tqdm(desc="Converting MPtrj", unit="frame", dynamic_ncols=True) as progress:
+        for material_id, frames in iter_mptrj_materials(args.input):
+            materials_seen += 1
+            if args.max_materials is not None and materials_seen > args.max_materials:
+                break
+            if not isinstance(frames, Mapping):
+                raise TypeError(f"MPtrj material {material_id!r} must contain a frame mapping.")
 
-        for frame_id, frame in frames.items():
+            for frame_id, frame in frames.items():
+                if args.limit is not None and len(samples) >= args.limit:
+                    break
+                if not isinstance(frame, Mapping):
+                    raise TypeError(f"MPtrj frame {frame_id!r} must be a mapping.")
+
+                try:
+                    samples.append(
+                        frame_to_atomic_sample(
+                            frame,
+                            material_id=str(material_id),
+                            frame_id=str(frame_id),
+                            metadata_mode=args.metadata,
+                            energy_key=args.energy_key,
+                            allow_missing_stress=args.allow_missing_stress,
+                        )
+                    )
+                except Exception as exc:
+                    if not args.skip_invalid:
+                        raise ValueError(
+                            f"Failed to convert MPtrj frame {material_id!r}/{frame_id!r}."
+                        ) from exc
+                    skipped += 1
+                finally:
+                    progress.update()
+                    progress.set_postfix(
+                        converted=len(samples),
+                        skipped=skipped,
+                        materials=materials_seen,
+                        refresh=False,
+                    )
+
             if args.limit is not None and len(samples) >= args.limit:
                 break
-            if not isinstance(frame, Mapping):
-                raise TypeError(f"MPtrj frame {frame_id!r} must be a mapping.")
-
-            try:
-                samples.append(
-                    frame_to_atomic_sample(
-                        frame,
-                        material_id=str(material_id),
-                        frame_id=str(frame_id),
-                        metadata_mode=args.metadata,
-                        energy_key=args.energy_key,
-                        allow_missing_stress=args.allow_missing_stress,
-                    )
-                )
-            except Exception as exc:
-                if not args.skip_invalid:
-                    raise ValueError(
-                        f"Failed to convert MPtrj frame {material_id!r}/{frame_id!r}."
-                    ) from exc
-                skipped += 1
-
-        if args.limit is not None and len(samples) >= args.limit:
-            break
 
     if not samples:
         raise ValueError("No MPtrj frames were converted.")
