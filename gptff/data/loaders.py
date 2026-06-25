@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
+from torch.utils.data.distributed import DistributedSampler
 
 from gptff.data.dataset import (
     AtomicDataset,
@@ -33,6 +34,7 @@ class DataLoaders:
     train: DataLoader
     validation: DataLoader
     test: DataLoader | None
+    train_sampler: DistributedSampler | None = None
 
 
 def load_atomic_dataset(config: TrainingConfig) -> AtomicDataset:
@@ -115,14 +117,15 @@ def _build_sharded_graph_datasets(
     )
 
 
-def apply_fitted_element_refs(config: TrainingConfig, dataset) -> None:
+def apply_fitted_element_refs(config: TrainingConfig, dataset, *, verbose: bool = True) -> None:
     if not config.element_references.fit_from_training_data:
         return
     if config.element_refs is not None:
         raise ValueError(
             "element_references.source='fit' cannot be combined with preloaded element refs."
         )
-    print("Fitting element_refs from the full dataset.")
+    if verbose:
+        print("Fitting element_refs from the full dataset.")
     samples = dataset.element_ref_records() if hasattr(dataset, "element_ref_records") else dataset
     config.element_refs = fit_element_refs_from_samples(
         samples,
@@ -135,7 +138,9 @@ def build_loaders(
     datasets: GraphDatasetSplits,
     *,
     generators: dict[str, torch.Generator],
+    distributed=None,
 ) -> DataLoaders:
+    distributed = distributed or _NoDistributedContext()
     pin_memory = torch.device(config.device).type == "cuda"
     common = {
         "batch_size": config.batch_size,
@@ -144,27 +149,75 @@ def build_loaders(
         "pin_memory": pin_memory,
         "worker_init_fn": seed_data_loader_worker,
     }
-    train = DataLoader(
-        datasets.train,
-        shuffle=True,
-        generator=generators["train"],
-        **common,
-    )
+    train_sampler = None
+    if distributed.enabled:
+        train_sampler = DistributedSampler(
+            datasets.train,
+            num_replicas=distributed.world_size,
+            rank=distributed.rank,
+            shuffle=True,
+            seed=config.seed,
+            drop_last=False,
+        )
+        train = DataLoader(
+            datasets.train,
+            shuffle=False,
+            sampler=train_sampler,
+            generator=generators["train"],
+            **common,
+        )
+    else:
+        train = DataLoader(
+            datasets.train,
+            shuffle=True,
+            generator=generators["train"],
+            **common,
+        )
+    validation_sampler = _eval_sampler(datasets.validation, distributed)
     validation = DataLoader(
         datasets.validation,
         shuffle=False,
+        sampler=validation_sampler,
         generator=generators["validation"],
         **common,
     )
     test = None
     if datasets.test is not None:
+        test_sampler = _eval_sampler(datasets.test, distributed)
         test = DataLoader(
             datasets.test,
             shuffle=False,
+            sampler=test_sampler,
             generator=generators["test"],
             **common,
         )
-    return DataLoaders(train=train, validation=validation, test=test)
+    return DataLoaders(train=train, validation=validation, test=test, train_sampler=train_sampler)
+
+
+class DistributedSequentialSampler(Sampler[int]):
+    """No-padding sequential eval sampler for rank-local dataset indices."""
+
+    def __init__(self, dataset, context) -> None:
+        self.indices = tuple(range(context.rank, len(dataset), context.world_size))
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+
+def _eval_sampler(dataset, distributed):
+    if not distributed.enabled:
+        return None
+    return DistributedSequentialSampler(dataset, distributed)
+
+
+@dataclass(frozen=True)
+class _NoDistributedContext:
+    enabled: bool = False
+    rank: int = 0
+    world_size: int = 1
 
 
 def _build_graph_dataset(

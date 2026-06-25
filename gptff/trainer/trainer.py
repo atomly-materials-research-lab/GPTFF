@@ -22,6 +22,16 @@ from gptff.data import (
 from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
 from gptff.trainer.config import TrainingConfig
+from gptff.trainer.distributed import (
+    DistributedContext,
+    all_reduce_max,
+    all_reduce_sum,
+    barrier,
+    cleanup_distributed,
+    initialize_distributed,
+    unwrap_model,
+    wrap_distributed_model,
+)
 from gptff.trainer.evaluation import (
     EvaluationRecord,
     build_evaluation_record,
@@ -31,6 +41,7 @@ from gptff.trainer.logger import (
     ConsoleLogger,
     CSVLogger,
     EpochLogRecord,
+    NullLogger,
     TrainingLogger,
     WandBLogger,
 )
@@ -78,6 +89,12 @@ class AverageMeter:
         self.sum += float(val) * n
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0.0
+
+    def set_sum_count(self, total: float, count: int) -> None:
+        self.sum = float(total)
+        self.count = int(count)
+        self.avg = self.sum / self.count if self.count > 0 else 0.0
+        self.val = self.avg
 
 
 def _meter_avg_or_nan(meter: AverageMeter) -> float:
@@ -170,6 +187,20 @@ def has_nonfinite_loss(batch_loss: BatchLoss) -> bool:
     return not bool(torch.isfinite(batch_loss.loss).item())
 
 
+def should_skip_optimizer_step(
+    batch_loss: BatchLoss,
+    context: DistributedContext,
+    *,
+    device: str,
+) -> bool:
+    local_skip = int(has_nonfinite_loss(batch_loss))
+    if not context.enabled:
+        return bool(local_skip)
+    skip = torch.tensor([local_skip], dtype=torch.int64, device=torch.device(device))
+    all_reduce_sum(skip, context)
+    return bool(skip.item() > 0)
+
+
 def update_metrics(metrics: EpochMetrics, batch_loss: BatchLoss) -> None:
     metrics.loss.update(batch_loss.loss.detach().cpu().item(), batch_loss.batch_size)
     if batch_loss.energy_mae is not None:
@@ -178,6 +209,67 @@ def update_metrics(metrics: EpochMetrics, batch_loss: BatchLoss) -> None:
         metrics.force_mae.update(batch_loss.force_mae.cpu().item(), batch_loss.force_count)
     if batch_loss.stress_mae is not None:
         metrics.stress_mae.update(batch_loss.stress_mae.cpu().item(), batch_loss.stress_count)
+
+
+def sync_epoch_metrics(
+    metrics: EpochMetrics,
+    context: DistributedContext,
+    *,
+    device: str,
+    skipped_reduce: str = "sum",
+) -> EpochMetrics:
+    if not context.enabled:
+        return metrics
+    torch_device = torch.device(device)
+    for meter in (
+        metrics.loss,
+        metrics.energy_mae,
+        metrics.force_mae,
+        metrics.stress_mae,
+    ):
+        values = torch.tensor(
+            [meter.sum, float(meter.count)],
+            dtype=torch.float64,
+            device=torch_device,
+        )
+        all_reduce_sum(values, context)
+        meter.set_sum_count(values[0].item(), int(values[1].item()))
+    skipped = torch.tensor(
+        [metrics.skipped_batches],
+        dtype=torch.int64,
+        device=torch_device,
+    )
+    if skipped_reduce == "sum":
+        all_reduce_sum(skipped, context)
+    elif skipped_reduce == "max":
+        all_reduce_max(skipped, context)
+    else:
+        raise ValueError("skipped_reduce must be 'sum' or 'max'.")
+    metrics.skipped_batches = int(skipped.item())
+    return metrics
+
+
+class _ProgressDisabled:
+    def __init__(self, iterable) -> None:
+        self.iterable = iterable
+
+    def __iter__(self):
+        return iter(self.iterable)
+
+    def set_postfix(self, **_kwargs) -> None:
+        return None
+
+
+def _progress_iterator(iterable, *, show: bool, desc: str):
+    if not show:
+        return _ProgressDisabled(iterable)
+    return tqdm(
+        iterable,
+        desc=desc,
+        unit="batch",
+        dynamic_ncols=True,
+        leave=False,
+    )
 
 
 def train_one_epoch(
@@ -190,17 +282,18 @@ def train_one_epoch(
     config: TrainingConfig,
     *,
     progress_description: str = "Train",
+    show_progress: bool = True,
+    distributed: DistributedContext | None = None,
 ) -> EpochMetrics:
+    distributed = distributed or DistributedContext.disabled(device=config.device)
     model.train()
     metrics = EpochMetrics.create()
     scheduler_batches = scheduler_step_batches(len(train_loader))
 
-    progress = tqdm(
+    progress = _progress_iterator(
         train_loader,
+        show=show_progress,
         desc=progress_description,
-        unit="batch",
-        dynamic_ncols=True,
-        leave=False,
     )
     for batch_idx, batch in enumerate(progress, start=1):
         batch = batch.to(config.device)
@@ -214,7 +307,7 @@ def train_one_epoch(
                 create_graph=True,
             )
 
-        if has_nonfinite_loss(batch_loss):
+        if should_skip_optimizer_step(batch_loss, distributed, device=config.device):
             metrics.skipped_batches += 1
             progress.set_postfix(skipped=metrics.skipped_batches, refresh=False)
             continue
@@ -243,16 +336,15 @@ def validate(
     config: TrainingConfig,
     *,
     progress_description: str = "Validation",
+    show_progress: bool = True,
 ) -> EpochMetrics:
     model.eval()
     metrics = EpochMetrics.create()
 
-    progress = tqdm(
+    progress = _progress_iterator(
         val_loader,
+        show=show_progress,
         desc=progress_description,
-        unit="batch",
-        dynamic_ncols=True,
-        leave=False,
     )
     for batch in progress:
         batch = batch.to(config.device)
@@ -315,62 +407,89 @@ class Trainer:
         self.optimizer: optim.Optimizer | None = None
         self.scheduler: Scheduler | None = None
         self.scaler: GradScaler | None = None
+        self.distributed = DistributedContext.disabled(device=config.device)
         self.train_loader = None
         self.val_loader = None
         self.test_loader = None
+        self.train_sampler = None
         self.data_loader_generators: dict[str, torch.Generator] = {}
         self.best_energy_mae = float("inf")
         self.best_force_mae = float("inf")
         self.logger = logger
 
     def setup(self, dataset: AtomicDataset | None = None) -> None:
+        self.distributed = initialize_distributed(
+            self.config.distributed,
+            requested_device=self.config.device,
+        )
+        if self.distributed.device is not None:
+            self.config.device = self.distributed.device
         configure_reproducibility(self.config.seed, self.config.deterministic)
         self.data_loader_generators = create_data_loader_generators(self.config.seed)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.distributed.is_main_process:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        barrier(self.distributed)
+        if self.logger is not None and not self.distributed.is_main_process:
+            self.logger = NullLogger()
         if self.logger is None:
-            self.logger = CompositeLogger(
-                [
-                    CSVLogger(self.output_dir),
-                    ConsoleLogger(),
-                    WandBLogger(self.config.logging.wandb, self.config.checkpoint_dict()),
-                ]
-            )
+            if self.distributed.is_main_process:
+                self.logger = CompositeLogger(
+                    [
+                        CSVLogger(self.output_dir),
+                        ConsoleLogger(),
+                        WandBLogger(self.config.logging.wandb, self.config.checkpoint_dict()),
+                    ]
+                )
+            else:
+                self.logger = NullLogger()
         if dataset is None:
             dataset = load_training_dataset(self.config)
         if not isinstance(dataset, (AtomicDataset, ShardedGraphDataset)):
             raise TypeError("dataset must be an AtomicDataset or ShardedGraphDataset.")
-        apply_fitted_element_refs(self.config, dataset)
+        apply_fitted_element_refs(
+            self.config,
+            dataset,
+            verbose=self.distributed.is_main_process,
+        )
         datasets = build_graph_datasets(
             dataset,
             self.config,
         )
         test_size = len(datasets.test) if datasets.test is not None else 0
-        print(
+        self._print(
             "Dataset samples: "
             f"total={len(dataset)}, "
             f"train={len(datasets.train)}, "
             f"validation={len(datasets.validation)}, "
-            f"test={test_size}",
-            flush=True,
+            f"test={test_size}"
         )
         loaders = build_loaders(
             self.config,
             datasets,
             generators=self.data_loader_generators,
+            distributed=self.distributed,
         )
         self.train_loader = loaders.train
         self.val_loader = loaders.validation
         self.test_loader = loaders.test
+        self.train_sampler = loaders.train_sampler
 
-        self.model = build_model(self.config)
-        print(f"Number of Model parameters: {count_parameters(self.model)}", flush=True)
+        raw_model = build_model(self.config)
+        self._print(f"Number of Model parameters: {count_parameters(raw_model)}")
 
-        self.optimizer = build_optimizer(self.model, self.config)
+        self.optimizer = build_optimizer(raw_model, self.config)
         self.scheduler = build_scheduler(self.optimizer, self.config)
+        self.model = wrap_distributed_model(raw_model, self.distributed)
         self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
 
+    def _print(self, message: str) -> None:
+        if self.distributed.is_main_process:
+            print(message, flush=True)
+
     def train_epoch(self, epoch: int) -> EpochMetrics:
-        return train_one_epoch(
+        if self.train_sampler is not None:
+            self.train_sampler.set_epoch(epoch)
+        metrics = train_one_epoch(
             self.train_loader,
             self.model,
             self.criterion,
@@ -379,27 +498,39 @@ class Trainer:
             self.scaler,
             self.config,
             progress_description=f"Train {epoch}/{self.config.epochs}",
+            show_progress=self.distributed.is_main_process,
+            distributed=self.distributed,
+        )
+        return sync_epoch_metrics(
+            metrics,
+            self.distributed,
+            device=self.config.device,
+            skipped_reduce="max",
         )
 
     def validate(self, epoch: int) -> EpochMetrics:
-        return validate(
+        metrics = validate(
             self.val_loader,
-            self.model,
+            unwrap_model(self.model),
             self.criterion,
             self.config,
             progress_description=f"Validation {epoch}/{self.config.epochs}",
+            show_progress=self.distributed.is_main_process,
         )
+        return sync_epoch_metrics(metrics, self.distributed, device=self.config.device)
 
     def test(self, *, progress_description: str = "Test") -> EpochMetrics | None:
         if self.test_loader is None:
             return None
-        return validate(
+        metrics = validate(
             self.test_loader,
-            self.model,
+            unwrap_model(self.model),
             self.criterion,
             self.config,
             progress_description=progress_description,
+            show_progress=self.distributed.is_main_process,
         )
+        return sync_epoch_metrics(metrics, self.distributed, device=self.config.device)
 
     def evaluate_test_set(
         self,
@@ -409,16 +540,18 @@ class Trainer:
         if self.test_loader is None:
             return None
 
+        barrier(self.distributed)
+        raw_model = unwrap_model(self.model)
         checkpoint_path = self.output_dir / checkpoint_filename
-        original_state = _clone_state_dict(self.model.state_dict())
-        original_training = self.model.training
+        original_state = _clone_state_dict(raw_model.state_dict())
+        original_training = raw_model.training
         checkpoint_name = None
         checkpoint_epoch = None
 
         try:
             if checkpoint_path.exists():
                 state = torch.load(checkpoint_path, map_location=torch.device(self.config.device))
-                self.model.load_state_dict(state["state_dict"])
+                raw_model.load_state_dict(state["state_dict"])
                 checkpoint_name = checkpoint_filename
                 checkpoint_epoch = int(state["epoch"]) if "epoch" in state else None
 
@@ -426,8 +559,8 @@ class Trainer:
                 progress_description=f"Test {checkpoint_name or 'current'}",
             )
         finally:
-            self.model.load_state_dict(original_state)
-            self.model.train(original_training)
+            raw_model.load_state_dict(original_state)
+            raw_model.train(original_training)
 
         record = build_evaluation_record(
             split="test",
@@ -441,19 +574,16 @@ class Trainer:
         )
         if self.logger is not None:
             self.logger.log_evaluation(record)
+        barrier(self.distributed)
         return record
 
     def fit(self, dataset: AtomicDataset | None = None) -> float:
-        self.setup(dataset)
-
         try:
+            self.setup(dataset)
             for epoch in range(self.config.epochs):
                 lr = optimizer_lr(self.optimizer)
                 current_epoch = epoch + 1
-                print(
-                    f"Epoch: [{current_epoch}/{self.config.epochs}], lr: {lr:.4e}",
-                    flush=True,
-                )
+                self._print(f"Epoch: [{current_epoch}/{self.config.epochs}], lr: {lr:.4e}")
 
                 train_metrics = self.train_epoch(current_epoch)
                 val_metrics = self.validate(current_epoch)
@@ -473,19 +603,23 @@ class Trainer:
                 is_best_force = validation_force_mae < self.best_force_mae
                 self.best_energy_mae = min(validation_energy_mae, self.best_energy_mae)
                 self.best_force_mae = min(validation_force_mae, self.best_force_mae)
-                save_checkpoint(
-                    self.output_dir,
-                    self.model,
-                    self.config,
-                    epoch=current_epoch,
-                    best_energy_mae=self.best_energy_mae,
-                    best_force_mae=self.best_force_mae,
-                    is_best_energy=is_best_energy,
-                    is_best_force=is_best_force,
-                )
+                if self.distributed.is_main_process:
+                    save_checkpoint(
+                        self.output_dir,
+                        unwrap_model(self.model),
+                        self.config,
+                        epoch=current_epoch,
+                        best_energy_mae=self.best_energy_mae,
+                        best_force_mae=self.best_force_mae,
+                        is_best_energy=is_best_energy,
+                        is_best_force=is_best_force,
+                    )
+                barrier(self.distributed)
             self.evaluate_test_set()
         finally:
-            self.logger.close()
+            if self.logger is not None:
+                self.logger.close()
+            cleanup_distributed(self.distributed)
 
         return self.best_force_mae
 

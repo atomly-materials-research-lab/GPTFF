@@ -57,6 +57,10 @@ class TrainingLoopConfig:
     grad_clip_norm: float = 10.0
     seed: int = 42
     deterministic: bool = True
+    distributed: str = "auto"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "distributed", _distributed_mode(self.distributed))
 
 
 @dataclass(frozen=True)
@@ -212,6 +216,7 @@ class TrainingConfig:
                 grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
                 seed=int(training.get("seed", 42)),
                 deterministic=bool(training.get("deterministic", True)),
+                distributed=_distributed_mode(training.get("distributed", "auto")),
             ),
             loss=LossConfig(
                 energy_loss_weight=float(
@@ -335,6 +340,10 @@ class TrainingConfig:
     @property
     def deterministic(self) -> bool:
         return self.training.deterministic
+
+    @property
+    def distributed(self) -> str:
+        return self.training.distributed
 
     @property
     def energy_loss_weight(self) -> float:
@@ -508,6 +517,15 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _distributed_mode(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    normalized = str(value).strip().lower()
+    if normalized in {"auto", "true", "false"}:
+        return normalized
+    raise ValueError("training.distributed must be one of: auto, true, false.")
 
 
 def _optional_str(value: Any) -> str | None:

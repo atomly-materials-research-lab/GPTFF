@@ -5,6 +5,7 @@ from pymatgen.core import Lattice, Structure
 from gptff.data import (
     AtomicDataset,
     AtomicSample,
+    DistributedSequentialSampler,
     GraphDataset,
     ShardedGraphDataset,
     ShardedGraphDatasetWriter,
@@ -16,6 +17,7 @@ from gptff.data import (
 )
 from gptff.graph import CrystalGraphConverter
 from gptff.trainer.config import TrainingConfig
+from gptff.trainer.distributed import DistributedContext
 from gptff.utils.reproducibility import create_data_loader_generators
 
 
@@ -292,6 +294,49 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     assert batch.num_atoms.tolist() == [1, 1]
     assert batch.radial_cutoff == pytest.approx(2.0)
     assert batch.angle_cutoff == pytest.approx(2.0)
+
+
+def test_build_loaders_uses_distributed_samplers_without_eval_padding(tmp_path):
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+
+    with ShardedGraphDatasetWriter(
+        output,
+        metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
+        shard_size=2,
+    ) as writer:
+        for index in range(6):
+            sample = _sample(index, material_id=f"material-{index // 2}")
+            writer.add(
+                graph=converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id=sample.sample_id,
+                material_id=sample.material_id,
+            )
+
+    config = _sharded_training_config(
+        output,
+        validation_fraction=1.0 / 3.0,
+        test_fraction=1.0 / 3.0,
+        group_by_material=True,
+    )
+    dataset = load_training_dataset(config)
+    splits = build_graph_datasets(dataset, config)
+    context = DistributedContext(enabled=True, rank=3, local_rank=3, world_size=4, device="cpu")
+
+    loaders = build_loaders(
+        config,
+        splits,
+        generators=create_data_loader_generators(config.seed),
+        distributed=context,
+    )
+
+    assert loaders.train_sampler is not None
+    assert isinstance(loaders.validation.sampler, DistributedSequentialSampler)
+    assert len(loaders.validation.sampler) == 0
+    assert list(loaders.validation) == []
 
 
 def test_load_training_dataset_rejects_sharded_cutoff_mismatch(tmp_path):

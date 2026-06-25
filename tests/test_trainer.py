@@ -17,23 +17,30 @@ from gptff.data import (
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
 from gptff.model.model import GPTFF
+from gptff.trainer import distributed as distributed_module
 from gptff.trainer.config import load_config
+from gptff.trainer.distributed import DistributedContext, cleanup_distributed, unwrap_model
 from gptff.trainer.evaluation import EvaluationRecord
 from gptff.trainer.logger import (
     CompositeLogger,
     ConsoleLogger,
     CSVLogger,
     EpochLogRecord,
+    NullLogger,
     WandBLogger,
 )
 from gptff.trainer.loss import BatchLoss
 from gptff.trainer.trainer import (
+    AverageMeter,
+    EpochMetrics,
     Trainer,
     TrainingConfig,
     build_optimizer,
     compute_batch_loss,
     has_nonfinite_loss,
     save_checkpoint,
+    should_skip_optimizer_step,
+    sync_epoch_metrics,
     use_cuda_amp,
 )
 
@@ -66,6 +73,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.amp is False
     assert config.seed == 42
     assert config.deterministic is True
+    assert config.distributed == "auto"
     assert config.logging.wandb.enabled is True
     assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
@@ -76,6 +84,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
     assert checkpoint_config["optimizer"]["learning_rate"] == pytest.approx(1e-3)
     assert checkpoint_config["training"]["batch_size"] == 4
+    assert checkpoint_config["training"]["distributed"] == "auto"
     assert checkpoint_config["loss"]["force_loss_weight"] == pytest.approx(1.0)
 
 
@@ -190,6 +199,24 @@ def test_training_config_defaults_num_workers_to_four():
     assert config.training.num_workers == 4
 
 
+def test_training_config_parses_distributed_modes():
+    raw_config = _canonical_config()
+    raw_config["training"]["distributed"] = True
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.distributed == "true"
+
+    raw_config["training"]["distributed"] = "false"
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.distributed == "false"
+
+    raw_config["training"]["distributed"] = "bad"
+    with pytest.raises(ValueError, match="distributed"):
+        TrainingConfig.from_dict(raw_config)
+
+
 def test_training_config_parses_wandb_logging_config():
     raw_config = _canonical_config()
     raw_config["logging"] = {
@@ -297,6 +324,13 @@ def test_only_nonfinite_losses_are_skipped():
     assert has_nonfinite_loss(_batch_loss(float("nan"))) is True
     assert has_nonfinite_loss(_batch_loss(float("inf"))) is True
     assert has_nonfinite_loss(_batch_loss(1e6)) is False
+
+
+def test_should_skip_optimizer_step_is_local_without_ddp():
+    context = DistributedContext.disabled(device="cpu")
+
+    assert should_skip_optimizer_step(_batch_loss(float("nan")), context, device="cpu") is True
+    assert should_skip_optimizer_step(_batch_loss(1.0), context, device="cpu") is False
 
 
 def test_build_graph_datasets_passes_graph_cache_config():
@@ -585,6 +619,61 @@ def test_wandb_logger_can_be_disabled():
 
     logger.log_epoch(_epoch_record(epoch=1))
     logger.close()
+
+
+def test_null_logger_is_noop():
+    logger = NullLogger()
+
+    logger.log_epoch(_epoch_record(epoch=1))
+    logger.log_evaluation(_evaluation_record())
+    logger.close()
+
+
+def test_unwrap_model_returns_raw_model_for_non_ddp():
+    model = torch.nn.Linear(1, 1)
+
+    assert unwrap_model(model) is model
+
+
+def test_cleanup_distributed_keeps_externally_owned_process_group(monkeypatch):
+    destroyed = []
+
+    monkeypatch.setattr(distributed_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(distributed_module.dist, "destroy_process_group", lambda: destroyed.append(True))
+
+    cleanup_distributed(
+        DistributedContext(
+            enabled=True,
+            rank=0,
+            local_rank=0,
+            world_size=2,
+            device="cpu",
+            owns_process_group=False,
+        )
+    )
+
+    assert destroyed == []
+
+
+def test_sync_epoch_metrics_is_noop_when_distributed_disabled():
+    metrics = EpochMetrics(
+        loss=AverageMeter(),
+        energy_mae=AverageMeter(),
+        force_mae=AverageMeter(),
+        stress_mae=AverageMeter(),
+        skipped_batches=2,
+    )
+    metrics.loss.update(1.5, n=2)
+
+    synced = sync_epoch_metrics(
+        metrics,
+        DistributedContext.disabled(device="cpu"),
+        device="cpu",
+    )
+
+    assert synced is metrics
+    assert metrics.loss.avg == pytest.approx(1.5)
+    assert metrics.skipped_batches == 2
 
 
 def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():

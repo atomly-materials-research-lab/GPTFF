@@ -184,6 +184,16 @@ For command-line training, set `data.dataset_path` to the serialized dataset:
 gptff train config.yaml
 ```
 
+For multi-GPU training, launch with PyTorch DDP:
+
+```bash
+torchrun --nproc_per_node=4 -m gptff.cli train config.yaml
+```
+
+When `training.distributed: auto`, GPTFF automatically enables DDP under
+`torchrun` when `WORLD_SIZE > 1`. Checkpoints and logs are written only by rank
+0, while all ranks participate in validation and testing.
+
 Large datasets can also be stored as precomputed sharded graph datasets. This
 avoids keeping all structures or graphs in memory during training:
 
@@ -243,13 +253,18 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 
 `training`:
 - `epochs`: Number of training epochs
-- `batch_size`: Number of structures in each batch
-- `num_workers`: Number of DataLoader workers
+- `batch_size`: Number of structures in each per-GPU batch. With DDP, global
+  batch size is `batch_size * world_size`.
+- `num_workers`: Number of DataLoader workers per process. With DDP, total
+  workers are `num_workers * world_size`.
 - `device`: `cpu` or `cuda`
 - `amp`: If true, enable CUDA automatic mixed precision during training
 - `output_dir`: Directory for checkpoints and `history.csv`
 - `seed`: Random seed shared by Python, NumPy, PyTorch, CUDA, and DataLoader shuffling
 - `deterministic`: If true, require deterministic PyTorch algorithms and disable cuDNN benchmarking
+- `distributed`: `auto`, `true`, or `false`. `auto` enables DDP when launched
+  by `torchrun`; `true` requires a torchrun environment; `false` always runs
+  single-process training.
 
 Model checkpoints are written at epoch boundaries. `last.pt` stores the latest model,
 `bestE.pt` stores the lowest validation energy MAE checkpoint, and `bestF.pt`

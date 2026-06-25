@@ -21,6 +21,7 @@ from gptff.trainer.logger import (
     ConsoleLogger,
     CSVLogger,
     EpochLogRecord,
+    NullLogger,
     TrainingLogger,
     WandBLogger,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "EpochLogRecord",
     "LoggingConfig",
     "LossConfig",
+    "NullLogger",
     "OptimizerConfig",
     "Trainer",
     "TrainingLogger",

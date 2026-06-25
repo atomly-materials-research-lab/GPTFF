@@ -6,6 +6,7 @@ from gptff.data.dataset import (
 )
 from gptff.data.loaders import (
     DataLoaders,
+    DistributedSequentialSampler,
     GraphDatasetSplits,
     apply_fitted_element_refs,
     build_graph_datasets,
@@ -28,6 +29,7 @@ __all__ = [
     "AtomicSample",
     "DataLoaders",
     "DatasetSplit",
+    "DistributedSequentialSampler",
     "GraphDataset",
     "GraphDatasetSplits",
     "ShardedGraphDataset",

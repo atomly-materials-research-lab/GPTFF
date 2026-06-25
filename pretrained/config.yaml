@@ -39,6 +39,7 @@ training:
   grad_clip_norm: 10.0
   seed: 42
   deterministic: true
+  distributed: auto
 
 loss:
   energy_loss_weight: 1.0

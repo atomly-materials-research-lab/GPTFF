@@ -57,6 +57,17 @@ class TrainingLogger(Protocol):
     def close(self) -> None: ...
 
 
+class NullLogger:
+    def log_epoch(self, record: EpochLogRecord) -> None:
+        return None
+
+    def log_evaluation(self, record: EvaluationRecord) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 class CSVLogger:
     def __init__(self, output_dir: str | Path, filename: str = "history.csv") -> None:
         self.path = Path(output_dir) / filename
