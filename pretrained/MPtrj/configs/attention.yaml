@@ -1,0 +1,70 @@
+model:
+  atom_feature_dim: 64
+  edge_feature_dim: 64
+  num_interaction_blocks: 3
+  num_radial: 9
+  num_angular: 9
+  radial_cutoff: 5.0
+  angle_cutoff: 4.0
+  cutoff_coeff: 5
+  max_atomic_number: 94
+  num_readout_layers: 3
+  readout_atom_norm: true
+  interaction_dropout: 0.0
+  atom_attention:
+    enabled: true
+    num_heads: 4
+    dropout: 0.0
+    use_ffn: true
+    ffn_hidden_dim: null
+
+element_references:
+  source: fit
+
+optimizer:
+  name: AdamW
+  learning_rate: 0.001
+  weight_decay: 0.01
+  scheduler: CosLR
+  scheduler_params:
+    decay_fraction: 0.01
+
+training:
+  epochs: 100
+  batch_size: 256
+  num_workers: 8
+  device: cuda
+  amp: false
+  output_dir: runs
+  grad_clip_norm: 10.0
+  seed: 42
+  deterministic: true
+
+loss:
+  energy_loss_weight: 1.0
+  force_loss_weight: 1.0
+  stress_loss_weight: 0.1
+
+logging:
+  wandb:
+    enabled: true
+    project: gptff-mptrj
+    entity: null
+    name: MPtrj
+    group: null
+    tags:
+      - MPtrj
+      - gptff
+      - attention
+    notes: null
+    mode: online
+    job_type: train
+
+data:
+  dataset_path: data/MPtrj_2022.9.gptff.json
+  validation_fraction: 0.05
+  test_fraction: 0.05
+  split_seed: 42
+  group_by_material: true
+  cache_graphs: false
+  graph_cache_size: null

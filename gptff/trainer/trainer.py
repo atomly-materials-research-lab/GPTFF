@@ -338,6 +338,7 @@ class Trainer:
             dataset = load_atomic_dataset(self.config)
         if not isinstance(dataset, AtomicDataset):
             raise TypeError("dataset must be an AtomicDataset.")
+        apply_fitted_element_refs(self.config, dataset)
         datasets = build_graph_datasets(
             dataset,
             self.config,
@@ -351,7 +352,6 @@ class Trainer:
             f"test={test_size}",
             flush=True,
         )
-        apply_fitted_element_refs(self.config, datasets.train)
         loaders = build_loaders(
             self.config,
             datasets,

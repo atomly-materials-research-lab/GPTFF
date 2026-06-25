@@ -50,7 +50,7 @@ def fit_element_refs_from_samples(
     observed = torch.zeros(max_atomic_number, dtype=torch.bool)
 
     for sample in _iter_samples(samples):
-        atom_types = torch.as_tensor(sample.graph.atom_types, dtype=torch.long)
+        atom_types = _sample_atom_types(sample)
         if atom_types.numel() == 0:
             raise ValueError("Cannot fit element_refs from an empty structure.")
         if torch.any((atom_types < 1) | (atom_types > max_atomic_number)):
@@ -95,6 +95,14 @@ def _iter_samples(samples):
             yield samples[idx]
     else:
         yield from samples
+
+
+def _sample_atom_types(sample) -> torch.Tensor:
+    if hasattr(sample, "graph") and hasattr(sample.graph, "atom_types"):
+        return torch.as_tensor(sample.graph.atom_types, dtype=torch.long)
+    if hasattr(sample, "structure"):
+        return torch.as_tensor([site.specie.Z for site in sample.structure], dtype=torch.long)
+    raise TypeError("Samples must provide either graph.atom_types or a pymatgen structure.")
 
 
 def _build_from_mapping(

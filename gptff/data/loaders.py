@@ -75,16 +75,16 @@ def build_graph_datasets(
     )
 
 
-def apply_fitted_element_refs(config: TrainingConfig, train_dataset) -> None:
+def apply_fitted_element_refs(config: TrainingConfig, dataset) -> None:
     if not config.element_references.fit_from_training_data:
         return
     if config.element_refs is not None:
         raise ValueError(
             "element_references.source='fit' cannot be combined with preloaded element refs."
         )
-    print("Fitting element_refs from the training dataset.")
+    print("Fitting element_refs from the full dataset.")
     config.element_refs = fit_element_refs_from_samples(
-        train_dataset,
+        dataset,
         max_atomic_number=config.max_atomic_number,
     )
 

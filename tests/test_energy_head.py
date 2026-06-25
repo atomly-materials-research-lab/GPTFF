@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 import torch
+from pymatgen.core import Lattice, Structure
 
+from gptff.data.dataset import AtomicDataset, AtomicSample
 from gptff.graph import CrystalGraph, GraphSample
 from gptff.model.readout import (
     EnergyHead,
@@ -110,6 +112,20 @@ def test_fit_element_refs_from_samples_recovers_composition_offsets():
     assert refs == pytest.approx({"1": -1.0, "3": 2.0})
 
 
+def test_fit_element_refs_from_atomic_dataset_uses_structures():
+    dataset = AtomicDataset(
+        (
+            _atomic_sample(["H"], -1.0, "h"),
+            _atomic_sample(["Li"], 2.0, "li"),
+            _atomic_sample(["H", "H", "Li"], 0.0, "h2li"),
+        )
+    )
+
+    refs = fit_element_refs_from_samples(dataset, max_atomic_number=3)
+
+    assert refs == pytest.approx({"1": -1.0, "3": 2.0})
+
+
 def _sample(atom_types, energy):
     atom_types = np.asarray(atom_types, dtype=np.int64)
     graph = CrystalGraph(
@@ -130,4 +146,19 @@ def _sample(atom_types, energy):
         energy=energy,
         forces=np.zeros((len(atom_types), 3), dtype=np.float32),
         stress=np.zeros((3, 3), dtype=np.float32),
+    )
+
+
+def _atomic_sample(species, energy, sample_id):
+    structure = Structure(
+        Lattice.cubic(4.0),
+        species,
+        [[idx / len(species), 0.0, 0.0] for idx in range(len(species))],
+    )
+    return AtomicSample(
+        structure=structure,
+        energy=energy,
+        forces=np.zeros((len(species), 3), dtype=np.float32),
+        stress=None,
+        sample_id=sample_id,
     )
