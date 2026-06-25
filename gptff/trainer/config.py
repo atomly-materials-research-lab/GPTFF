@@ -63,11 +63,6 @@ class LossConfig:
 @dataclass(frozen=True)
 class ElementReferenceConfig:
     source: Any = None
-    ridge: float = 0.0
-
-    def __post_init__(self) -> None:
-        if self.ridge < 0:
-            raise ValueError("element reference ridge must be non-negative.")
 
     @classmethod
     def from_dict(
@@ -80,10 +75,7 @@ class ElementReferenceConfig:
             return cls()
         if not isinstance(raw_config, Mapping):
             return cls(source=_resolve_element_reference_source(raw_config, base_dir))
-        return cls(
-            source=_resolve_element_reference_source(raw_config.get("source", None), base_dir),
-            ridge=float(raw_config.get("ridge", 0.0)),
-        )
+        return cls(source=_resolve_element_reference_source(raw_config.get("source", None), base_dir))
 
     @property
     def fit_from_training_data(self) -> bool:

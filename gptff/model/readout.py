@@ -41,13 +41,9 @@ def build_element_ref_tensor(
 def fit_element_refs_from_samples(
     samples,
     max_atomic_number: int,
-    *,
-    ridge: float = 0.0,
 ) -> dict[str, float]:
     if max_atomic_number < 1:
         raise ValueError("max_atomic_number must be positive.")
-    if ridge < 0:
-        raise ValueError("ridge must be non-negative.")
 
     compositions = []
     energies = []
@@ -80,18 +76,10 @@ def fit_element_refs_from_samples(
     if active_matrix.shape[1] == 0:
         raise ValueError("No elements were observed while fitting element_refs.")
 
-    if ridge == 0:
-        solution = torch.linalg.lstsq(
-            active_matrix,
-            target_energy.unsqueeze(-1),
-        ).solution.squeeze(-1)
-    else:
-        gram = active_matrix.T @ active_matrix
-        regularizer = ridge * torch.eye(gram.shape[0], dtype=gram.dtype)
-        solution = torch.linalg.solve(
-            gram + regularizer,
-            active_matrix.T @ target_energy,
-        )
+    solution = torch.linalg.lstsq(
+        active_matrix,
+        target_energy.unsqueeze(-1),
+    ).solution.squeeze(-1)
 
     refs = torch.zeros(max_atomic_number, dtype=torch.float64)
     refs[observed] = solution

@@ -86,7 +86,6 @@ def apply_fitted_element_refs(config: TrainingConfig, train_dataset) -> None:
     config.element_refs = fit_element_refs_from_samples(
         train_dataset,
         max_atomic_number=config.max_atomic_number,
-        ridge=config.element_references.ridge,
     )
 
 

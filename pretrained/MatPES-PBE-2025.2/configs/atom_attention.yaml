@@ -23,7 +23,6 @@ model:
 
 element_references:
   source: data/MatPES-PBE-element-refs.json
-  ridge: 0.0
 
 optimizer:
   name: AdamW

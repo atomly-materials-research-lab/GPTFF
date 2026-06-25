@@ -224,7 +224,6 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 
 `element_references`:
 - `source`: Elemental reference energy source. Use `"fit"`, `null`, a mapping, a list, or a YAML/JSON file path. Mapping keys must be atomic numbers.
-- `ridge`: Ridge regularization used when `source: fit`
 
 `optimizer`:
 - `name`: Optimizer name. The default is `"AdamW"`; `"Adam"`, `"RAdam"`, and `"SGD"` are also supported.

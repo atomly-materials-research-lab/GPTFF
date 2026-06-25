@@ -23,7 +23,6 @@ model:
 
 element_references:
   source: null
-  ridge: 0.0
 
 optimizer:
   name: AdamW

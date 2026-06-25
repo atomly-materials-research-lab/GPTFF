@@ -54,7 +54,6 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.cache_graphs is True
     assert config.graph_cache_size == 16
     assert config.element_references.source == {"1": -1.0, "3": 2.0}
-    assert config.element_references.ridge == pytest.approx(0.0)
     assert config.element_refs == {"1": -1.0, "3": 2.0}
     assert config.num_readout_layers == 4
     assert config.readout_atom_norm is True
@@ -333,7 +332,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
 
 def test_apply_fitted_element_refs_updates_checkpoint_config():
     raw_config = _raw_config()
-    raw_config["element_references"] = {"source": "fit", "ridge": 0.0}
+    raw_config["element_references"] = {"source": "fit"}
     config = TrainingConfig.from_dict(raw_config)
     samples = [
         _sample([1], -1.0),
@@ -577,7 +576,7 @@ def test_wandb_logger_can_be_disabled():
 
 def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():
     raw_config = _raw_config()
-    raw_config["element_references"] = {"source": "fit", "ridge": 0.0}
+    raw_config["element_references"] = {"source": "fit"}
     config = TrainingConfig.from_dict(raw_config)
     config.element_refs = {"1": -1.0}
 
@@ -897,7 +896,6 @@ def _raw_config():
         },
         "element_references": {
             "source": {"1": -1.0, "3": 2.0},
-            "ridge": 0.0,
         },
         "data": {
             "dataset_path": "dataset.json",
