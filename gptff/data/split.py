@@ -6,8 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gptff.data.dataset import AtomicDataset
-
 
 @dataclass(frozen=True)
 class DatasetSplit:
@@ -31,29 +29,57 @@ class DatasetSplit:
         if not self.validation_indices:
             raise ValueError("Validation split must not be empty.")
 
-    def validate_for_dataset(self, dataset: AtomicDataset) -> None:
+    def validate_for_dataset(self, dataset) -> None:
+        self.validate_for_size(len(dataset))
+
+    def validate_for_size(self, dataset_size: int) -> None:
         all_indices = sorted(self.train_indices + self.validation_indices + self.test_indices)
-        if all_indices != list(range(len(dataset))):
+        if all_indices != list(range(int(dataset_size))):
             raise ValueError("Dataset split must contain every sample exactly once.")
 
 
 def split_atomic_dataset(
-    dataset: AtomicDataset,
+    dataset,
     *,
     validation_fraction: float,
     test_fraction: float = 0.0,
     seed: int = 42,
     group_by_material: bool = False,
 ) -> DatasetSplit:
+    material_ids = None
+    if group_by_material:
+        material_ids = []
+        for sample in dataset:
+            if sample.material_id is None:
+                raise ValueError("group_by_material requires material_id for every AtomicSample.")
+            material_ids.append(sample.material_id)
+    return split_dataset_indices(
+        len(dataset),
+        validation_fraction=validation_fraction,
+        test_fraction=test_fraction,
+        seed=seed,
+        material_ids=material_ids,
+    )
+
+
+def split_dataset_indices(
+    dataset_size: int,
+    *,
+    validation_fraction: float,
+    test_fraction: float = 0.0,
+    seed: int = 42,
+    material_ids: Sequence[str | None] | None = None,
+) -> DatasetSplit:
     fractions = _validate_split_fractions(validation_fraction, test_fraction)
-    target_counts = _target_partition_counts(len(dataset), fractions)
+    dataset_size = int(dataset_size)
+    target_counts = _target_partition_counts(dataset_size, fractions)
     rng = np.random.default_rng(int(seed))
 
-    if group_by_material:
-        split = _grouped_split(dataset, target_counts, rng)
+    if material_ids is not None:
+        split = _grouped_split(material_ids, target_counts, rng)
     else:
-        split = _random_split(len(dataset), target_counts, rng)
-    split.validate_for_dataset(dataset)
+        split = _random_split(dataset_size, target_counts, rng)
+    split.validate_for_size(dataset_size)
     return split
 
 
@@ -74,15 +100,15 @@ def _random_split(
 
 
 def _grouped_split(
-    dataset: AtomicDataset,
+    material_ids: Sequence[str | None],
     target_counts: Sequence[int],
     rng: np.random.Generator,
 ) -> DatasetSplit:
     groups: dict[str, list[int]] = defaultdict(list)
-    for index, sample in enumerate(dataset):
-        if sample.material_id is None:
-            raise ValueError("group_by_material requires material_id for every AtomicSample.")
-        groups[sample.material_id].append(index)
+    for index, material_id in enumerate(material_ids):
+        if material_id is None:
+            raise ValueError("group_by_material requires material_id for every sample.")
+        groups[str(material_id)].append(index)
 
     active_partitions = [index for index, target in enumerate(target_counts) if target > 0]
     if len(groups) < len(active_partitions):

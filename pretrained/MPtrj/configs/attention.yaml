@@ -61,7 +61,8 @@ logging:
     job_type: train
 
 data:
-  dataset_path: data/MPtrj_2022.9.gptff.json
+  dataset_path: data/MPtrj_2022.9.gptff
+  dataset_format: sharded_hdf5_graph
   validation_fraction: 0.05
   test_fraction: 0.05
   split_seed: 42

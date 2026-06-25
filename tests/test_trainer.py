@@ -47,6 +47,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.scheduler == "CosLR"
     assert config.scheduler_params["decay_fraction"] == pytest.approx(0.01)
     assert config.dataset_path == "dataset.json"
+    assert config.dataset_format == "atomic_json"
     assert config.validation_fraction == pytest.approx(0.5)
     assert config.test_fraction == pytest.approx(0.0)
     assert config.split_seed == 42
@@ -69,6 +70,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
+    assert checkpoint_config["data"]["dataset_format"] == "atomic_json"
     assert checkpoint_config["model"]["element_refs"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["element_references"]["source"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
@@ -143,6 +145,17 @@ def test_training_config_builds_split_config_from_data_fields():
     assert config.test_fraction == pytest.approx(0.0)
     assert config.split_seed == 42
     assert config.group_by_material is False
+
+
+def test_training_config_parses_sharded_graph_dataset_format():
+    raw_config = _raw_config()
+    raw_config["data"]["dataset_path"] = "dataset.gptff"
+    raw_config["data"]["dataset_format"] = "sharded-hdf5-graph"
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.dataset_path == "dataset.gptff"
+    assert config.dataset_format == "sharded_hdf5_graph"
 
 
 def test_training_config_parses_canonical_sections_without_legacy_keys():

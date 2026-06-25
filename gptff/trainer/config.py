@@ -13,6 +13,7 @@ from gptff.model import GPTFFConfig
 @dataclass(frozen=True)
 class DataConfig:
     dataset_path: str | None = None
+    dataset_format: str = "atomic_json"
     validation_fraction: float = 0.1
     test_fraction: float = 0.0
     split_seed: int = 42
@@ -21,6 +22,7 @@ class DataConfig:
     graph_cache_size: int | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "dataset_format", self.dataset_format.replace("-", "_"))
         if not 0.0 < self.validation_fraction < 1.0:
             raise ValueError("validation_fraction must be between 0 and 1.")
         if not 0.0 <= self.test_fraction < 1.0:
@@ -29,6 +31,10 @@ class DataConfig:
             raise ValueError("validation_fraction + test_fraction must be less than 1.")
         if self.graph_cache_size is not None and self.graph_cache_size < 0:
             raise ValueError("graph_cache_size must be non-negative or null.")
+        if self.dataset_format not in {"atomic_json", "sharded_hdf5_graph"}:
+            raise ValueError(
+                "dataset_format must be 'atomic_json' or 'sharded_hdf5_graph'."
+            )
 
 
 @dataclass(frozen=True)
@@ -180,6 +186,7 @@ class TrainingConfig:
         return cls(
             data=DataConfig(
                 dataset_path=_optional_str(data.get("dataset_path")),
+                dataset_format=str(data.get("dataset_format", "atomic_json")).replace("-", "_"),
                 validation_fraction=float(data.get("validation_fraction", 0.1)),
                 test_fraction=float(data.get("test_fraction", 0.0)),
                 split_seed=int(data.get("split_seed", 42)),
@@ -236,6 +243,10 @@ class TrainingConfig:
     @property
     def dataset_path(self) -> str | None:
         return self.data.dataset_path
+
+    @property
+    def dataset_format(self) -> str:
+        return self.data.dataset_format
 
     @property
     def validation_fraction(self) -> float:

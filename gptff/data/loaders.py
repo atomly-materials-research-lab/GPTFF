@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,8 @@ from gptff.data.dataset import (
     GraphDataset,
     collate_graph_samples,
 )
-from gptff.data.split import split_atomic_dataset
+from gptff.data.sharded_graph import ShardedGraphDataset
+from gptff.data.split import split_atomic_dataset, split_dataset_indices
 from gptff.model.readout import fit_element_refs_from_samples
 from gptff.utils.reproducibility import seed_data_loader_worker
 
@@ -21,9 +23,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class GraphDatasetSplits:
-    train: GraphDataset
-    validation: GraphDataset
-    test: GraphDataset | None
+    train: GraphDataset | ShardedGraphDataset
+    validation: GraphDataset | ShardedGraphDataset
+    test: GraphDataset | ShardedGraphDataset | None
 
 
 @dataclass(frozen=True)
@@ -41,11 +43,28 @@ def load_atomic_dataset(config: TrainingConfig) -> AtomicDataset:
     return AtomicDataset.from_file(config.dataset_path)
 
 
+def load_training_dataset(config: TrainingConfig) -> AtomicDataset | ShardedGraphDataset:
+    if config.dataset_path is None:
+        raise ValueError(
+            "data.dataset_path is required when Trainer.fit() is called without a dataset."
+        )
+    if config.dataset_format == "atomic_json":
+        return AtomicDataset.from_file(config.dataset_path)
+    if config.dataset_format == "sharded_hdf5_graph":
+        dataset = ShardedGraphDataset(config.dataset_path)
+        _validate_sharded_dataset_cutoffs(dataset, config)
+        return dataset
+    raise ValueError(f"Unsupported data.dataset_format: {config.dataset_format!r}")
+
+
 def build_graph_datasets(
-    dataset: AtomicDataset,
+    dataset: AtomicDataset | ShardedGraphDataset,
     config: TrainingConfig,
 ) -> GraphDatasetSplits:
     _validate_training_labels(dataset, require_stress=config.stress_loss_weight > 0.0)
+    if isinstance(dataset, ShardedGraphDataset):
+        return _build_sharded_graph_datasets(dataset, config)
+
     split = split_atomic_dataset(
         dataset,
         validation_fraction=config.validation_fraction,
@@ -75,6 +94,27 @@ def build_graph_datasets(
     )
 
 
+def _build_sharded_graph_datasets(
+    dataset: ShardedGraphDataset,
+    config: TrainingConfig,
+) -> GraphDatasetSplits:
+    material_ids = None
+    if config.group_by_material:
+        material_ids = [record.material_id for record in dataset.records]
+    split = split_dataset_indices(
+        len(dataset),
+        validation_fraction=config.validation_fraction,
+        test_fraction=config.test_fraction,
+        seed=config.split_seed,
+        material_ids=material_ids,
+    )
+    return GraphDatasetSplits(
+        train=dataset.subset(split.train_indices, name="train"),
+        validation=dataset.subset(split.validation_indices, name="validation"),
+        test=None if not split.test_indices else dataset.subset(split.test_indices, name="test"),
+    )
+
+
 def apply_fitted_element_refs(config: TrainingConfig, dataset) -> None:
     if not config.element_references.fit_from_training_data:
         return
@@ -83,8 +123,9 @@ def apply_fitted_element_refs(config: TrainingConfig, dataset) -> None:
             "element_references.source='fit' cannot be combined with preloaded element refs."
         )
     print("Fitting element_refs from the full dataset.")
+    samples = dataset.element_ref_records() if hasattr(dataset, "element_ref_records") else dataset
     config.element_refs = fit_element_refs_from_samples(
-        dataset,
+        samples,
         max_atomic_number=config.max_atomic_number,
     )
 
@@ -139,20 +180,70 @@ def _build_graph_dataset(
     )
 
 
+def _validate_sharded_dataset_cutoffs(
+    dataset: ShardedGraphDataset,
+    config: TrainingConfig,
+) -> None:
+    _validate_sharded_cutoff(
+        dataset,
+        metadata_key="radial_cutoff",
+        expected=config.radial_cutoff,
+        config_key="model.radial_cutoff",
+    )
+    _validate_sharded_cutoff(
+        dataset,
+        metadata_key="angle_cutoff",
+        expected=config.angle_cutoff,
+        config_key="model.angle_cutoff",
+    )
+
+
+def _validate_sharded_cutoff(
+    dataset: ShardedGraphDataset,
+    *,
+    metadata_key: str,
+    expected: float,
+    config_key: str,
+) -> None:
+    if metadata_key not in dataset.metadata:
+        return
+    actual = float(dataset.metadata[metadata_key])
+    if math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-8):
+        return
+    raise ValueError(
+        f"Sharded graph dataset {metadata_key}={actual:g} does not match "
+        f"{config_key}={expected:g}. Regenerate the sharded dataset with matching "
+        "cutoffs or update the training config."
+    )
+
+
 def _validate_training_labels(
-    dataset: AtomicDataset,
+    dataset: AtomicDataset | ShardedGraphDataset,
     *,
     require_stress: bool,
 ) -> None:
     if not require_stress:
         return
+    if isinstance(dataset, ShardedGraphDataset):
+        missing = [
+            dataset.sample_key(index) for index in range(len(dataset)) if not dataset.has_stress(index)
+        ]
+        _raise_missing_stress(missing)
+        return
+
     missing = [
         dataset.sample_key(index) for index, sample in enumerate(dataset) if sample.stress is None
     ]
     if missing:
-        preview = ", ".join(missing[:5])
-        suffix = "" if len(missing) <= 5 else f" and {len(missing) - 5} more"
-        raise ValueError(
-            "stress labels are required when stress_loss_weight is positive; "
-            f"missing for {preview}{suffix}."
-        )
+        _raise_missing_stress(missing)
+
+
+def _raise_missing_stress(missing: list[str]) -> None:
+    if not missing:
+        return
+    preview = ", ".join(missing[:5])
+    suffix = "" if len(missing) <= 5 else f" and {len(missing) - 5} more"
+    raise ValueError(
+        "stress labels are required when stress_loss_weight is positive; "
+        f"missing for {preview}{suffix}."
+    )

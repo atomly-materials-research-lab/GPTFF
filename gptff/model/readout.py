@@ -50,19 +50,7 @@ def fit_element_refs_from_samples(
     observed = torch.zeros(max_atomic_number, dtype=torch.bool)
 
     for sample in _iter_samples(samples):
-        atom_types = _sample_atom_types(sample)
-        if atom_types.numel() == 0:
-            raise ValueError("Cannot fit element_refs from an empty structure.")
-        if torch.any((atom_types < 1) | (atom_types > max_atomic_number)):
-            raise ValueError(
-                "Atomic numbers must be in the range "
-                f"[1, {max_atomic_number}] when fitting element_refs."
-            )
-
-        composition = torch.bincount(
-            atom_types,
-            minlength=max_atomic_number + 1,
-        )[1:].to(torch.float64)
+        composition = _sample_composition(sample, max_atomic_number)
         compositions.append(composition)
         energies.append(float(sample.energy))
         observed |= composition > 0
@@ -103,6 +91,32 @@ def _sample_atom_types(sample) -> torch.Tensor:
     if hasattr(sample, "structure"):
         return torch.as_tensor([site.specie.Z for site in sample.structure], dtype=torch.long)
     raise TypeError("Samples must provide either graph.atom_types or a pymatgen structure.")
+
+
+def _sample_composition(sample, max_atomic_number: int) -> torch.Tensor:
+    if hasattr(sample, "composition"):
+        composition = torch.zeros(max_atomic_number, dtype=torch.float64)
+        for atomic_number, count in sample.composition.items():
+            atomic_number = int(atomic_number)
+            if atomic_number < 1 or atomic_number > max_atomic_number:
+                raise ValueError(
+                    "Atomic numbers must be in the range "
+                    f"[1, {max_atomic_number}] when fitting element_refs."
+                )
+            composition[atomic_number - 1] = float(count)
+        if torch.count_nonzero(composition) == 0:
+            raise ValueError("Cannot fit element_refs from an empty structure.")
+        return composition
+
+    atom_types = _sample_atom_types(sample)
+    if atom_types.numel() == 0:
+        raise ValueError("Cannot fit element_refs from an empty structure.")
+    if torch.any((atom_types < 1) | (atom_types > max_atomic_number)):
+        raise ValueError(
+            "Atomic numbers must be in the range "
+            f"[1, {max_atomic_number}] when fitting element_refs."
+        )
+    return torch.bincount(atom_types, minlength=max_atomic_number + 1)[1:].to(torch.float64)
 
 
 def _build_from_mapping(

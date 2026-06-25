@@ -184,7 +184,16 @@ For command-line training, set `data.dataset_path` to the serialized dataset:
 gptff train config.yaml
 ```
 
-Elemental reference energies are configured through the top-level `element_references` section, not stored as a dataset column. Provide your own mapping/list as `source`, set `source: fit` to fit references from the training split, set `source: null` to disable references, or point `source` to a YAML/JSON reference file.
+Large datasets can also be stored as precomputed sharded graph datasets. This
+avoids keeping all structures or graphs in memory during training:
+
+```yaml
+data:
+  dataset_path: /path/to/dataset.gptff
+  dataset_format: sharded_hdf5_graph
+```
+
+Elemental reference energies are configured through the top-level `element_references` section, not stored as a dataset column. Provide your own mapping/list as `source`, set `source: fit` to fit references from the full input dataset, set `source: null` to disable references, or point `source` to a YAML/JSON reference file.
 
 Reference mappings must use atomic-number keys, not element symbols:
 
@@ -252,8 +261,13 @@ stores the lowest validation force MAE checkpoint.
 - `stress_loss_weight`: Weight factor of the stress loss
 
 `data`:
-- `dataset_path`: Optional path to a Monty-serialized `AtomicDataset`. This is
-  required by the command-line trainer but not by `Trainer.fit(dataset)`.
+- `dataset_path`: Optional path to a training dataset. Use a Monty-serialized
+  `AtomicDataset` JSON/JSON.GZ file for small and medium datasets, or a
+  sharded HDF5 graph dataset directory for large precomputed graph datasets.
+  This is required by the command-line trainer but not by `Trainer.fit(dataset)`.
+- `dataset_format`: Dataset format. Use `atomic_json` for serialized
+  `AtomicDataset` files and `sharded_hdf5_graph` for sharded graph dataset
+  directories.
 - `validation_fraction`: Fraction of samples reserved for validation.
 - `test_fraction`: Fraction of samples reserved for testing. Use `0` to omit a
   test split.

@@ -13,10 +13,11 @@ from tqdm.auto import tqdm
 
 from gptff.data import (
     AtomicDataset,
+    ShardedGraphDataset,
     apply_fitted_element_refs,
     build_graph_datasets,
     build_loaders,
-    load_atomic_dataset,
+    load_training_dataset,
 )
 from gptff.model import GPTFF
 from gptff.trainer.checkpoint import save_checkpoint
@@ -335,9 +336,9 @@ class Trainer:
                 ]
             )
         if dataset is None:
-            dataset = load_atomic_dataset(self.config)
-        if not isinstance(dataset, AtomicDataset):
-            raise TypeError("dataset must be an AtomicDataset.")
+            dataset = load_training_dataset(self.config)
+        if not isinstance(dataset, (AtomicDataset, ShardedGraphDataset)):
+            raise TypeError("dataset must be an AtomicDataset or ShardedGraphDataset.")
         apply_fitted_element_refs(self.config, dataset)
         datasets = build_graph_datasets(
             dataset,

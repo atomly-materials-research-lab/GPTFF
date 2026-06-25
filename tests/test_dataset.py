@@ -6,9 +6,17 @@ from gptff.data import (
     AtomicDataset,
     AtomicSample,
     GraphDataset,
+    ShardedGraphDataset,
+    ShardedGraphDatasetWriter,
+    build_graph_datasets,
+    build_loaders,
+    load_training_dataset,
     split_atomic_dataset,
+    split_dataset_indices,
 )
 from gptff.graph import CrystalGraphConverter
+from gptff.trainer.config import TrainingConfig
+from gptff.utils.reproducibility import create_data_loader_generators
 
 
 def test_atomic_sample_validates_and_normalizes_labels():
@@ -144,6 +152,173 @@ def test_graph_dataset_rejects_negative_cache_size():
         GraphDataset(AtomicDataset((_sample(0),)), cache_graphs=True, cache_size=-1)
 
 
+def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
+    atomic_dataset = AtomicDataset(
+        (
+            _sample(0, material_id="mat-a", stress=np.eye(3)),
+            _sample(1, material_id="mat-b", stress=2 * np.eye(3)),
+        )
+    )
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+
+    with ShardedGraphDatasetWriter(output, name="graphs", shard_size=1) as writer:
+        for sample in atomic_dataset:
+            writer.add(
+                graph=converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id=sample.sample_id,
+                material_id=sample.material_id,
+            )
+
+    dataset = ShardedGraphDataset(output)
+    subset = dataset.subset([1], name="validation")
+    sample = subset[0]
+
+    assert len(dataset) == 2
+    assert len(subset) == 1
+    assert dataset.metadata["num_shards"] == 2
+    assert dataset.metadata["radial_cutoff"] == pytest.approx(2.0)
+    assert dataset.metadata["angle_cutoff"] == pytest.approx(2.0)
+    assert subset.sample_key(0) == "frame-1"
+    assert subset.material_id(0) == "mat-b"
+    assert sample.energy == pytest.approx(-1.0)
+    assert sample.forces.shape == (1, 3)
+    assert np.allclose(sample.stress, -0.2 * np.eye(3, dtype=np.float32))
+
+
+def test_sharded_graph_dataset_element_ref_records_do_not_load_graphs(tmp_path):
+    atomic_dataset = AtomicDataset(
+        (
+            _sample(0, material_id="mat-a"),
+            _sample(1, material_id="mat-b"),
+        )
+    )
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+
+    with ShardedGraphDatasetWriter(output, shard_size=2) as writer:
+        for sample in atomic_dataset:
+            writer.add(
+                graph=converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id=sample.sample_id,
+                material_id=sample.material_id,
+            )
+
+    records = list(ShardedGraphDataset(output).element_ref_records())
+
+    assert [record.energy for record in records] == [0.0, -1.0]
+    assert records[0].composition == {"11": 1}
+    assert records[1].composition == {"17": 1}
+
+
+def test_sharded_graph_dataset_writer_rejects_mixed_cutoffs(tmp_path):
+    first_converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    second_converter = CrystalGraphConverter(radial_cutoff=3.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+    sample = _sample(0)
+
+    with ShardedGraphDatasetWriter(output, shard_size=2) as writer:
+        writer.add(
+            graph=first_converter.convert(sample.structure),
+            energy=sample.energy,
+            forces=sample.forces,
+            stress=sample.stress,
+            sample_id="first",
+            material_id=None,
+        )
+        with pytest.raises(ValueError, match="radial_cutoff"):
+            writer.add(
+                graph=second_converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id="second",
+                material_id=None,
+            )
+
+
+def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+
+    with ShardedGraphDatasetWriter(
+        output,
+        name="graphs",
+        metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
+        shard_size=2,
+    ) as writer:
+        for index in range(6):
+            sample = _sample(index, material_id=f"material-{index // 2}")
+            writer.add(
+                graph=converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id=sample.sample_id,
+                material_id=sample.material_id,
+            )
+
+    config = _sharded_training_config(
+        output,
+        validation_fraction=1.0 / 3.0,
+        test_fraction=1.0 / 3.0,
+        group_by_material=True,
+    )
+
+    dataset = load_training_dataset(config)
+    splits = build_graph_datasets(dataset, config)
+    loaders = build_loaders(
+        config,
+        splits,
+        generators=create_data_loader_generators(config.seed),
+    )
+    batch = next(iter(loaders.train))
+
+    assert isinstance(dataset, ShardedGraphDataset)
+    assert isinstance(splits.train, ShardedGraphDataset)
+    assert len(splits.train) == 2
+    assert len(splits.validation) == 2
+    assert splits.test is not None
+    assert len(splits.test) == 2
+    assert batch.energy is not None
+    assert batch.forces is not None
+    assert batch.stress is not None
+    assert batch.num_atoms.tolist() == [1, 1]
+    assert batch.radial_cutoff == pytest.approx(2.0)
+    assert batch.angle_cutoff == pytest.approx(2.0)
+
+
+def test_load_training_dataset_rejects_sharded_cutoff_mismatch(tmp_path):
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+    sample = _sample(0)
+
+    with ShardedGraphDatasetWriter(
+        output,
+        metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
+        shard_size=1,
+    ) as writer:
+        writer.add(
+            graph=converter.convert(sample.structure),
+            energy=sample.energy,
+            forces=sample.forces,
+            stress=sample.stress,
+            sample_id=sample.sample_id,
+            material_id=sample.material_id,
+        )
+
+    config = _sharded_training_config(output, radial_cutoff=3.0)
+
+    with pytest.raises(ValueError, match="radial_cutoff=2"):
+        load_training_dataset(config)
+
+
 def test_random_split_is_deterministic_and_complete():
     dataset = _dataset(10)
 
@@ -200,6 +375,27 @@ def test_grouped_split_requires_material_ids():
         )
 
 
+def test_split_dataset_indices_groups_material_ids():
+    split = split_dataset_indices(
+        4,
+        validation_fraction=0.25,
+        test_fraction=0.25,
+        seed=3,
+        material_ids=("a", "a", "b", "c"),
+    )
+
+    partitions = {}
+    for partition_name, indices in (
+        ("train", split.train_indices),
+        ("validation", split.validation_indices),
+        ("test", split.test_indices),
+    ):
+        for index in indices:
+            material_id = ("a", "a", "b", "c")[index]
+            assert material_id not in partitions or partitions[material_id] == partition_name
+            partitions[material_id] = partition_name
+
+
 class _CountingConverter:
     def __init__(self, **kwargs):
         self.converter = CrystalGraphConverter(**kwargs)
@@ -227,3 +423,55 @@ def _sample(index, *, sample_id=None, material_id=None, stress=np.zeros((3, 3)))
 
 def _dataset(size):
     return AtomicDataset(tuple(_sample(index) for index in range(size)))
+
+
+def _sharded_training_config(
+    dataset_path,
+    *,
+    radial_cutoff=2.0,
+    angle_cutoff=2.0,
+    validation_fraction=0.5,
+    test_fraction=0.0,
+    group_by_material=False,
+):
+    return TrainingConfig.from_dict(
+        {
+            "model": {
+                "atom_feature_dim": 8,
+                "edge_feature_dim": 8,
+                "num_interaction_blocks": 1,
+                "num_radial": 4,
+                "num_angular": 3,
+                "radial_cutoff": radial_cutoff,
+                "angle_cutoff": angle_cutoff,
+                "cutoff_coeff": 5,
+                "max_atomic_number": 94,
+                "num_readout_layers": 2,
+                "readout_atom_norm": True,
+                "interaction_dropout": 0.0,
+                "atom_attention": {"enabled": False},
+            },
+            "optimizer": {"learning_rate": 1e-3},
+            "training": {
+                "epochs": 1,
+                "batch_size": 2,
+                "num_workers": 0,
+                "device": "cpu",
+            },
+            "loss": {
+                "energy_loss_weight": 1.0,
+                "force_loss_weight": 1.0,
+                "stress_loss_weight": 0.1,
+            },
+            "data": {
+                "dataset_path": str(dataset_path),
+                "dataset_format": "sharded-hdf5-graph",
+                "validation_fraction": validation_fraction,
+                "test_fraction": test_fraction,
+                "split_seed": 7,
+                "group_by_material": group_by_material,
+                "cache_graphs": False,
+                "graph_cache_size": None,
+            },
+        }
+    )

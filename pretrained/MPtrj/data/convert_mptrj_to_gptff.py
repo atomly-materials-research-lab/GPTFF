@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MPtrj JSON data into a GPTFF AtomicDataset JSON file.
+"""Convert MPtrj JSON data into GPTFF training data.
 
 MPtrj is a nested JSON mapping:
 
@@ -17,9 +17,9 @@ MPtrj is a nested JSON mapping:
         ...
     }
 
-GPTFF's AtomicSample stores total energy in eV, forces in eV/angstrom, and raw
-VASP stress in kbar. The graph dataset handles VASP stress sign/unit conversion
-when samples are loaded for training.
+The default output is a sharded HDF5 graph dataset for large-scale training.
+For small debugging jobs, ``--format atomic-json`` can still write a legacy
+AtomicDataset JSON file.
 """
 
 from __future__ import annotations
@@ -27,18 +27,21 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import shutil
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pymatgen.core import Structure
 from tqdm.auto import tqdm
 
-from gptff.data import AtomicSample
+from gptff.data import AtomicSample, ShardedGraphDatasetWriter
+from gptff.graph import CrystalGraphConverter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = SCRIPT_DIR / "MPtrj_2022.9_full.json"
-DEFAULT_OUTPUT = SCRIPT_DIR / "MPtrj_2022.9.gptff.json"
+DEFAULT_OUTPUT = SCRIPT_DIR / "MPtrj_2022.9.gptff"
 LABEL_KEYS = {
     "structure",
     "corrected_total_energy",
@@ -58,9 +61,17 @@ COMPACT_METADATA_KEYS = (
 )
 
 
+@dataclass(frozen=True)
+class MPtrjFrame:
+    material_id: str
+    frame_id: str
+    frame: Mapping[str, Any]
+    material_index: int
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert MPtrj JSON/JSON.GZ data into GPTFF AtomicDataset format."
+        description="Convert MPtrj JSON/JSON.GZ data into GPTFF training data."
     )
     parser.add_argument(
         "input",
@@ -74,7 +85,13 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help=f"Output AtomicDataset JSON/JSON.GZ file. Default: {DEFAULT_OUTPUT}",
+        help=f"Output dataset path. Default: {DEFAULT_OUTPUT}",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("sharded-hdf5-graph", "atomic-json"),
+        default="sharded-hdf5-graph",
+        help="Output format. Default: sharded-hdf5-graph.",
     )
     parser.add_argument(
         "--name",
@@ -115,11 +132,52 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Read at most this many outer mp-id groups.",
     )
+    parser.add_argument(
+        "--radial-cutoff",
+        type=float,
+        default=5.0,
+        help="Radial graph cutoff for sharded-hdf5-graph output. Default: 5.0.",
+    )
+    parser.add_argument(
+        "--angle-cutoff",
+        type=float,
+        default=4.0,
+        help="Angle graph cutoff for sharded-hdf5-graph output. Default: 4.0.",
+    )
+    parser.add_argument(
+        "--shard-size",
+        type=int,
+        default=5000,
+        help="Number of graph samples per HDF5 shard. Default: 5000.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing output path.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    validate_output_path(args)
+    if args.format == "atomic-json":
+        convert_to_atomic_json(args)
+    else:
+        convert_to_sharded_hdf5_graph(args)
+
+
+def validate_output_path(args: argparse.Namespace) -> None:
+    if args.format == "sharded-hdf5-graph" and (
+        args.output.suffix == ".json" or args.output.name.endswith(".json.gz")
+    ):
+        raise ValueError(
+            "sharded-hdf5-graph output must be a dataset directory path, for example "
+            "'MPtrj_2022.9.gptff'. Use '--format atomic-json' for JSON output."
+        )
+
+
+def convert_to_atomic_json(args: argparse.Namespace) -> None:
     converted = 0
     skipped = 0
     materials_seen = 0
@@ -131,54 +189,40 @@ def main() -> None:
             write_dataset_header(output_file)
 
             with tqdm(desc="Converting MPtrj", unit="frame", dynamic_ncols=True) as progress:
-                for material_id, frames in iter_mptrj_materials(args.input):
-                    if args.max_materials is not None and materials_seen >= args.max_materials:
-                        break
-                    materials_seen += 1
-                    if not isinstance(frames, Mapping):
-                        raise TypeError(
-                            f"MPtrj material {material_id!r} must contain a frame mapping."
-                        )
-
-                    for frame_id, frame in frames.items():
-                        if args.limit is not None and converted >= args.limit:
-                            break
-                        if not isinstance(frame, Mapping):
-                            raise TypeError(f"MPtrj frame {frame_id!r} must be a mapping.")
-
-                        try:
-                            sample = frame_to_atomic_sample(
-                                frame,
-                                material_id=str(material_id),
-                                frame_id=str(frame_id),
-                                metadata_mode=args.metadata,
-                                energy_key=args.energy_key,
-                                allow_missing_stress=args.allow_missing_stress,
-                            )
-                            write_dataset_sample(
-                                output_file,
-                                sample,
-                                is_first_sample=converted == 0,
-                            )
-                            converted += 1
-                        except Exception as exc:
-                            if not args.skip_invalid:
-                                raise ValueError(
-                                    f"Failed to convert MPtrj frame "
-                                    f"{material_id!r}/{frame_id!r}."
-                                ) from exc
-                            skipped += 1
-                        finally:
-                            progress.update()
-                            progress.set_postfix(
-                                converted=converted,
-                                skipped=skipped,
-                                materials=materials_seen,
-                                refresh=False,
-                            )
-
+                for record in iter_mptrj_frames(args.input, max_materials=args.max_materials):
+                    materials_seen = max(materials_seen, record.material_index)
                     if args.limit is not None and converted >= args.limit:
                         break
+                    try:
+                        sample = frame_to_atomic_sample(
+                            record.frame,
+                            material_id=record.material_id,
+                            frame_id=record.frame_id,
+                            metadata_mode=args.metadata,
+                            energy_key=args.energy_key,
+                            allow_missing_stress=args.allow_missing_stress,
+                        )
+                        write_dataset_sample(
+                            output_file,
+                            sample,
+                            is_first_sample=converted == 0,
+                        )
+                        converted += 1
+                    except Exception as exc:
+                        if not args.skip_invalid:
+                            raise ValueError(
+                                f"Failed to convert MPtrj frame "
+                                f"{record.material_id!r}/{record.frame_id!r}."
+                            ) from exc
+                        skipped += 1
+                    finally:
+                        progress.update()
+                        progress.set_postfix(
+                            converted=converted,
+                            skipped=skipped,
+                            materials=materials_seen,
+                            refresh=False,
+                        )
 
             if converted == 0:
                 raise ValueError("No MPtrj frames were converted.")
@@ -205,6 +249,105 @@ def main() -> None:
         raise
 
     print(f"Converted {converted} MPtrj frames to GPTFF AtomicDataset: {args.output}")
+    print(f"Read {materials_seen} material groups.")
+    if skipped:
+        print(f"Skipped {skipped} invalid frames.")
+
+
+def convert_to_sharded_hdf5_graph(args: argparse.Namespace) -> None:
+    converted = 0
+    skipped = 0
+    materials_seen = 0
+    output_tmp = temporary_output_path(args.output)
+    converter = CrystalGraphConverter(
+        radial_cutoff=args.radial_cutoff,
+        angle_cutoff=args.angle_cutoff,
+    )
+
+    if args.output.exists():
+        if not args.overwrite:
+            raise FileExistsError(f"Output path already exists: {args.output}")
+    if output_tmp.exists():
+        if output_tmp.is_dir():
+            shutil.rmtree(output_tmp)
+        else:
+            output_tmp.unlink()
+
+    try:
+        with ShardedGraphDatasetWriter(
+            output_tmp,
+            name=args.name or dataset_name_from_path(args.input),
+            metadata={
+                "source_format": "MPtrj",
+                "source_file": str(args.input),
+                "energy_key": args.energy_key,
+                "energy_unit": "eV",
+                "force_unit": "eV/angstrom",
+                "stress_input_unit": "kbar",
+                "stress_input_convention": "raw VASP stress",
+                "radial_cutoff": args.radial_cutoff,
+                "angle_cutoff": args.angle_cutoff,
+            },
+            shard_size=args.shard_size,
+            overwrite=True,
+        ) as writer:
+            with tqdm(desc="Converting MPtrj", unit="frame", dynamic_ncols=True) as progress:
+                for record in iter_mptrj_frames(args.input, max_materials=args.max_materials):
+                    materials_seen = max(materials_seen, record.material_index)
+                    if args.limit is not None and converted >= args.limit:
+                        break
+                    try:
+                        sample = frame_to_atomic_sample(
+                            record.frame,
+                            material_id=record.material_id,
+                            frame_id=record.frame_id,
+                            metadata_mode=args.metadata,
+                            energy_key=args.energy_key,
+                            allow_missing_stress=args.allow_missing_stress,
+                        )
+                        writer.add(
+                            graph=converter.convert(sample.structure),
+                            energy=sample.energy,
+                            forces=sample.forces,
+                            stress=sample.stress,
+                            sample_id=sample.sample_id,
+                            material_id=sample.material_id,
+                        )
+                        converted += 1
+                    except Exception as exc:
+                        if not args.skip_invalid:
+                            raise ValueError(
+                                f"Failed to convert MPtrj frame "
+                                f"{record.material_id!r}/{record.frame_id!r}."
+                            ) from exc
+                        skipped += 1
+                    finally:
+                        progress.update()
+                        progress.set_postfix(
+                            converted=converted,
+                            skipped=skipped,
+                            materials=materials_seen,
+                            refresh=False,
+                        )
+
+            if converted == 0:
+                raise ValueError("No MPtrj frames were converted.")
+            writer.metadata.update(
+                num_converted=converted,
+                num_skipped=skipped,
+                num_materials_read=materials_seen,
+            )
+        if args.output.exists():
+            if args.output.is_dir():
+                shutil.rmtree(args.output)
+            else:
+                args.output.unlink()
+        output_tmp.replace(args.output)
+    except Exception:
+        shutil.rmtree(output_tmp, ignore_errors=True)
+        raise
+
+    print(f"Converted {converted} MPtrj frames to sharded GPTFF graph dataset: {args.output}")
     print(f"Read {materials_seen} material groups.")
     if skipped:
         print(f"Skipped {skipped} invalid frames.")
@@ -308,59 +451,67 @@ def metadata(
     return data
 
 
-def iter_mptrj_materials(path: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
+def iter_mptrj_frames(
+    path: Path,
+    *,
+    max_materials: int | None = None,
+) -> Iterator[MPtrjFrame]:
     if not path.exists():
         raise FileNotFoundError(f"MPtrj input file not found: {path}")
-    yield from iter_json_object_items(path)
+    yield from iter_json_frames(path, max_materials=max_materials)
 
 
-def iter_json_object_items(path: Path, *, chunk_size: int = 1024 * 1024):
-    """Stream top-level JSON object items without loading the full file."""
+def iter_json_frames(
+    path: Path,
+    *,
+    max_materials: int | None = None,
+    chunk_size: int = 1024 * 1024,
+) -> Iterator[MPtrjFrame]:
+    """Stream nested MPtrj material/frame items without loading material groups."""
 
     decoder = json.JSONDecoder()
     buffer = ""
     object_started = False
+    material_index = 0
     done = False
 
     opener = gzip.open if is_gzip_path(path) else open
     with opener(path, "rt", encoding="utf-8") as file:
         while not done:
-            buffer = ensure_buffer(file, buffer, chunk_size)
-            buffer = buffer.lstrip()
-
             if not object_started:
-                if not buffer:
-                    continue
-                if buffer[0] != "{":
+                char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+                if char != "{":
                     raise ValueError("Expected a top-level JSON object.")
-                buffer = buffer[1:]
                 object_started = True
                 continue
 
-            buffer = ensure_buffer(file, buffer, chunk_size).lstrip()
-            if not buffer:
-                continue
-            if buffer[0] == "}":
+            char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+            if char == "}":
                 done = True
-                buffer = buffer[1:]
                 continue
-            if buffer[0] == ",":
-                buffer = buffer[1:]
+            if char == ",":
                 continue
 
+            buffer = char + buffer
             material_id, buffer = raw_decode_with_more(decoder, file, buffer, chunk_size)
             if not isinstance(material_id, str):
                 raise ValueError("MPtrj top-level keys must be strings.")
+            material_index += 1
+            if max_materials is not None and material_index > max_materials:
+                break
 
-            buffer = ensure_buffer(file, buffer, chunk_size).lstrip()
-            if not buffer or buffer[0] != ":":
+            char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+            if char != ":":
                 raise ValueError(f"Expected ':' after material id {material_id!r}.")
-            buffer = buffer[1:]
 
-            frames, buffer = raw_decode_with_more(decoder, file, buffer, chunk_size)
-            if not isinstance(frames, Mapping):
-                raise ValueError(f"MPtrj material {material_id!r} must contain a mapping.")
-            yield material_id, frames
+            buffer = yield from iter_material_frames(
+                decoder,
+                file,
+                buffer,
+                chunk_size,
+                material_id=material_id,
+                material_index=material_index,
+            )
 
 
 def ensure_buffer(file, buffer: str, chunk_size: int) -> str:
@@ -370,6 +521,57 @@ def ensure_buffer(file, buffer: str, chunk_size: int) -> str:
             raise ValueError("Unexpected end of JSON file.")
         buffer += chunk
     return buffer
+
+
+def pop_next_non_whitespace(file, buffer: str, chunk_size: int) -> tuple[str, str]:
+    while True:
+        buffer = ensure_buffer(file, buffer, chunk_size)
+        stripped = buffer.lstrip()
+        if stripped:
+            return stripped[0], stripped[1:]
+        buffer = ""
+
+
+def iter_material_frames(
+    decoder: json.JSONDecoder,
+    file,
+    buffer: str,
+    chunk_size: int,
+    *,
+    material_id: str,
+    material_index: int,
+) -> Iterator[MPtrjFrame]:
+    char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+    if char != "{":
+        raise ValueError(f"MPtrj material {material_id!r} must contain a frame mapping.")
+
+    while True:
+        char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+        if char == "}":
+            return buffer
+        if char == ",":
+            continue
+
+        buffer = char + buffer
+        frame_id, buffer = raw_decode_with_more(decoder, file, buffer, chunk_size)
+        if not isinstance(frame_id, str):
+            raise ValueError(f"MPtrj frame keys for material {material_id!r} must be strings.")
+
+        char, buffer = pop_next_non_whitespace(file, buffer, chunk_size)
+        if char != ":":
+            raise ValueError(
+                f"Expected ':' after frame id {material_id!r}/{frame_id!r}."
+            )
+
+        frame, buffer = raw_decode_with_more(decoder, file, buffer, chunk_size)
+        if not isinstance(frame, Mapping):
+            raise ValueError(f"MPtrj frame {material_id!r}/{frame_id!r} must be a mapping.")
+        yield MPtrjFrame(
+            material_id=material_id,
+            frame_id=frame_id,
+            frame=frame,
+            material_index=material_index,
+        )
 
 
 def raw_decode_with_more(decoder: json.JSONDecoder, file, buffer: str, chunk_size: int):
