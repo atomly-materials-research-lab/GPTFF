@@ -180,12 +180,17 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
     sample = subset[0]
     _ = dataset[0]
     _ = dataset[1]
+    unlimited = ShardedGraphDataset(output)
+    _ = unlimited[0]
+    _ = unlimited[1]
 
     assert len(dataset) == 2
     assert len(subset) == 1
     assert dataset.max_open_files == 1
     assert subset.max_open_files == 1
     assert len(dataset._files) == 1
+    assert unlimited.max_open_files is None
+    assert len(unlimited._files) == 2
     assert dataset.metadata["num_shards"] == 2
     assert dataset.metadata["radial_cutoff"] == pytest.approx(2.0)
     assert dataset.metadata["angle_cutoff"] == pytest.approx(2.0)

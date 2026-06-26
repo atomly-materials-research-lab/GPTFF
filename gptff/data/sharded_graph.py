@@ -70,14 +70,16 @@ class ShardedGraphDataset(Dataset):
         *,
         records: Sequence[ShardedGraphIndexRecord] | None = None,
         metadata: Mapping[str, Any] | None = None,
-        max_open_files: int = 64,
+        max_open_files: int | None = None,
     ) -> None:
         self.root = Path(root)
         self.metadata = dict(load_sharded_graph_metadata(self.root) if metadata is None else metadata)
         self.records = tuple(load_sharded_graph_index(self.root) if records is None else records)
         if not self.records:
             raise ValueError("ShardedGraphDataset must contain at least one sample.")
-        self.max_open_files = _positive_int(max_open_files, "max_open_files")
+        self.max_open_files = (
+            None if max_open_files is None else _positive_int(max_open_files, "max_open_files")
+        )
         self._files: OrderedDict[str, h5py.File] = OrderedDict()
 
     def __getstate__(self):
@@ -143,6 +145,8 @@ class ShardedGraphDataset(Dataset):
         return file
 
     def _evict_open_files(self) -> None:
+        if self.max_open_files is None:
+            return
         while len(self._files) > self.max_open_files:
             _, file = self._files.popitem(last=False)
             file.close()

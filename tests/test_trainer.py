@@ -66,7 +66,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.group_by_material is False
     assert config.cache_graphs is True
     assert config.graph_cache_size == 16
-    assert config.max_open_files == 64
+    assert config.max_open_files is None
     assert config.element_references.source == {"1": -1.0, "3": 2.0}
     assert config.element_refs == {"1": -1.0, "3": 2.0}
     assert config.num_readout_layers == 4
@@ -85,7 +85,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
     assert checkpoint_config["data"]["dataset_format"] == "atomic_json"
-    assert checkpoint_config["data"]["max_open_files"] == 64
+    assert checkpoint_config["data"]["max_open_files"] is None
     assert checkpoint_config["model"]["element_refs"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["element_references"]["source"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
