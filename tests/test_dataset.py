@@ -175,12 +175,17 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
                 material_id=sample.material_id,
             )
 
-    dataset = ShardedGraphDataset(output)
+    dataset = ShardedGraphDataset(output, max_open_files=1)
     subset = dataset.subset([1], name="validation")
     sample = subset[0]
+    _ = dataset[0]
+    _ = dataset[1]
 
     assert len(dataset) == 2
     assert len(subset) == 1
+    assert dataset.max_open_files == 1
+    assert subset.max_open_files == 1
+    assert len(dataset._files) == 1
     assert dataset.metadata["num_shards"] == 2
     assert dataset.metadata["radial_cutoff"] == pytest.approx(2.0)
     assert dataset.metadata["angle_cutoff"] == pytest.approx(2.0)
@@ -283,6 +288,7 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     batch = next(iter(loaders.train))
 
     assert isinstance(dataset, ShardedGraphDataset)
+    assert dataset.max_open_files == config.max_open_files
     assert isinstance(splits.train, ShardedGraphDataset)
     assert len(splits.train) == 2
     assert len(splits.validation) == 2
@@ -292,6 +298,7 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     assert batch.forces is not None
     assert batch.stress is not None
     assert batch.num_atoms.tolist() == [1, 1]
+    assert loaders.train.persistent_workers is False
     assert batch.radial_cutoff == pytest.approx(2.0)
     assert batch.angle_cutoff == pytest.approx(2.0)
 

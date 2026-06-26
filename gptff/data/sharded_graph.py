@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,17 +70,19 @@ class ShardedGraphDataset(Dataset):
         *,
         records: Sequence[ShardedGraphIndexRecord] | None = None,
         metadata: Mapping[str, Any] | None = None,
+        max_open_files: int = 64,
     ) -> None:
         self.root = Path(root)
         self.metadata = dict(load_sharded_graph_metadata(self.root) if metadata is None else metadata)
         self.records = tuple(load_sharded_graph_index(self.root) if records is None else records)
         if not self.records:
             raise ValueError("ShardedGraphDataset must contain at least one sample.")
-        self._files: dict[str, h5py.File] = {}
+        self.max_open_files = _positive_int(max_open_files, "max_open_files")
+        self._files: OrderedDict[str, h5py.File] = OrderedDict()
 
     def __getstate__(self):
         state = dict(self.__dict__)
-        state["_files"] = {}
+        state["_files"] = OrderedDict()
         return state
 
     def __len__(self) -> int:
@@ -106,6 +109,7 @@ class ShardedGraphDataset(Dataset):
             self.root,
             records=tuple(self.records[int(index)] for index in indices),
             metadata=metadata,
+            max_open_files=self.max_open_files,
         )
 
     def sample_key(self, index: int) -> str:
@@ -133,7 +137,15 @@ class ShardedGraphDataset(Dataset):
         if file is None:
             file = h5py.File(self.root / relative_path, "r")
             self._files[relative_path] = file
+            self._evict_open_files()
+            return file
+        self._files.move_to_end(relative_path)
         return file
+
+    def _evict_open_files(self) -> None:
+        while len(self._files) > self.max_open_files:
+            _, file = self._files.popitem(last=False)
+            file.close()
 
 
 class ShardedGraphDatasetWriter:

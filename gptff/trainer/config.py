@@ -20,6 +20,7 @@ class DataConfig:
     group_by_material: bool = False
     cache_graphs: bool = False
     graph_cache_size: int | None = None
+    max_open_files: int = 64
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_format", self.dataset_format.replace("-", "_"))
@@ -31,6 +32,8 @@ class DataConfig:
             raise ValueError("validation_fraction + test_fraction must be less than 1.")
         if self.graph_cache_size is not None and self.graph_cache_size < 0:
             raise ValueError("graph_cache_size must be non-negative or null.")
+        if self.max_open_files <= 0:
+            raise ValueError("max_open_files must be positive.")
         if self.dataset_format not in {"atomic_json", "sharded_hdf5_graph"}:
             raise ValueError(
                 "dataset_format must be 'atomic_json' or 'sharded_hdf5_graph'."
@@ -197,6 +200,7 @@ class TrainingConfig:
                 group_by_material=bool(data.get("group_by_material", False)),
                 cache_graphs=bool(data.get("cache_graphs", False)),
                 graph_cache_size=_optional_int(data.get("graph_cache_size", None)),
+                max_open_files=int(data.get("max_open_files", 64)),
             ),
             model=model_config,
             optimizer=OptimizerConfig(
@@ -276,6 +280,10 @@ class TrainingConfig:
     @property
     def graph_cache_size(self) -> int | None:
         return self.data.graph_cache_size
+
+    @property
+    def max_open_files(self) -> int:
+        return self.data.max_open_files
 
     @property
     def lr(self) -> float:

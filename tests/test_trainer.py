@@ -19,7 +19,12 @@ from gptff.model import GPTFFConfig
 from gptff.model.model import GPTFF
 from gptff.trainer import distributed as distributed_module
 from gptff.trainer.config import load_config
-from gptff.trainer.distributed import DistributedContext, cleanup_distributed, unwrap_model
+from gptff.trainer.distributed import (
+    DistributedContext,
+    barrier,
+    cleanup_distributed,
+    unwrap_model,
+)
 from gptff.trainer.evaluation import EvaluationRecord
 from gptff.trainer.logger import (
     CompositeLogger,
@@ -61,6 +66,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.group_by_material is False
     assert config.cache_graphs is True
     assert config.graph_cache_size == 16
+    assert config.max_open_files == 64
     assert config.element_references.source == {"1": -1.0, "3": 2.0}
     assert config.element_refs == {"1": -1.0, "3": 2.0}
     assert config.num_readout_layers == 4
@@ -79,6 +85,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
     assert checkpoint_config["data"]["dataset_format"] == "atomic_json"
+    assert checkpoint_config["data"]["max_open_files"] == 64
     assert checkpoint_config["model"]["element_refs"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["element_references"]["source"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
@@ -148,12 +155,15 @@ def test_element_reference_file_requires_atomic_number_keys(tmp_path):
 
 
 def test_training_config_builds_split_config_from_data_fields():
-    config = TrainingConfig.from_dict(_raw_config())
+    raw_config = _raw_config()
+    raw_config["data"]["max_open_files"] = 32
+    config = TrainingConfig.from_dict(raw_config)
 
     assert config.validation_fraction == pytest.approx(0.5)
     assert config.test_fraction == pytest.approx(0.0)
     assert config.split_seed == 42
     assert config.group_by_material is False
+    assert config.max_open_files == 32
 
 
 def test_training_config_parses_sharded_graph_dataset_format():
@@ -653,6 +663,51 @@ def test_cleanup_distributed_keeps_externally_owned_process_group(monkeypatch):
     )
 
     assert destroyed == []
+
+
+def test_barrier_passes_cuda_device_ids(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        distributed_module.dist,
+        "barrier",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    barrier(
+        DistributedContext(
+            enabled=True,
+            rank=0,
+            local_rank=2,
+            world_size=4,
+            device="cuda:2",
+            owns_process_group=True,
+        )
+    )
+
+    assert calls == [{"device_ids": [2]}]
+
+
+def test_cleanup_distributed_warns_when_destroy_fails(monkeypatch, capsys):
+    monkeypatch.setattr(distributed_module.dist, "is_initialized", lambda: True)
+
+    def fail_destroy():
+        raise RuntimeError("destroy failed")
+
+    monkeypatch.setattr(distributed_module.dist, "destroy_process_group", fail_destroy)
+
+    cleanup_distributed(
+        DistributedContext(
+            enabled=True,
+            rank=0,
+            local_rank=0,
+            world_size=2,
+            device="cpu",
+            owns_process_group=True,
+        )
+    )
+
+    assert "failed to destroy distributed process group" in capsys.readouterr().err
 
 
 def test_sync_epoch_metrics_is_noop_when_distributed_disabled():

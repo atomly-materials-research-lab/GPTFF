@@ -183,6 +183,10 @@ def use_cuda_amp(config: TrainingConfig) -> bool:
     return bool(config.amp) and torch.device(config.device).type == "cuda"
 
 
+def use_non_blocking_transfer(config: TrainingConfig) -> bool:
+    return torch.device(config.device).type == "cuda"
+
+
 def has_nonfinite_loss(batch_loss: BatchLoss) -> bool:
     return not bool(torch.isfinite(batch_loss.loss).item())
 
@@ -296,7 +300,10 @@ def train_one_epoch(
         desc=progress_description,
     )
     for batch_idx, batch in enumerate(progress, start=1):
-        batch = batch.to(config.device)
+        batch = batch.to(
+            config.device,
+            non_blocking=use_non_blocking_transfer(config),
+        )
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(
@@ -347,7 +354,10 @@ def validate(
         desc=progress_description,
     )
     for batch in progress:
-        batch = batch.to(config.device)
+        batch = batch.to(
+            config.device,
+            non_blocking=use_non_blocking_transfer(config),
+        )
 
         with autocast("cuda", enabled=use_cuda_amp(config)):
             batch_loss = compute_batch_loss(

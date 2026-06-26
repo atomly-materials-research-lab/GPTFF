@@ -100,6 +100,19 @@ def test_converter_and_batch_keep_cutoff_metadata():
     assert batch.angle_cutoff == pytest.approx(1.9)
 
 
+def test_batch_pin_memory_is_noop_without_cuda(monkeypatch):
+    structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
+    batch = CrystalGraphBatch.from_graphs([graph])
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    pinned = batch.pin_memory()
+
+    assert pinned.atom_types is batch.atom_types
+    assert pinned.positions is batch.positions
+
+
 def test_batch_rejects_mismatched_cutoff_metadata():
     structure = Structure(Lattice.cubic(2.0), ["Na"], [[0.0, 0.0, 0.0]])
     graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)

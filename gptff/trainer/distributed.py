@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 
 import torch
@@ -97,7 +98,11 @@ def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
 
 def barrier(context: DistributedContext) -> None:
     if context.enabled:
-        dist.barrier()
+        device = torch.device(context.device or "cpu")
+        if device.type == "cuda":
+            dist.barrier(device_ids=[context.local_rank])
+        else:
+            dist.barrier()
 
 
 def all_reduce_sum(tensor: torch.Tensor, context: DistributedContext) -> torch.Tensor:
@@ -114,4 +119,11 @@ def all_reduce_max(tensor: torch.Tensor, context: DistributedContext) -> torch.T
 
 def cleanup_distributed(context: DistributedContext) -> None:
     if context.enabled and context.owns_process_group and dist.is_initialized():
-        dist.destroy_process_group()
+        try:
+            dist.destroy_process_group()
+        except RuntimeError as exc:
+            print(
+                f"Warning: failed to destroy distributed process group: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )

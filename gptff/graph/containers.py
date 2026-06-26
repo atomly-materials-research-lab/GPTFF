@@ -123,9 +123,21 @@ class CrystalGraphBatch:
             stress=_optional_stack_tensor(stresses),
         )
 
-    def to(self, device: torch.device | str) -> CrystalGraphBatch:
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> CrystalGraphBatch:
         fields = {
-            name: value.to(device) if isinstance(value, torch.Tensor) else value
+            name: _tensor_to(value, device, non_blocking=non_blocking)
+            for name, value in self.__dict__.items()
+        }
+        return type(self)(**fields)
+
+    def pin_memory(self) -> CrystalGraphBatch:
+        fields = {
+            name: _pin_memory(value)
             for name, value in self.__dict__.items()
         }
         return type(self)(**fields)
@@ -203,9 +215,14 @@ class DifferentiableGraphBatch(CrystalGraphBatch):
     triplet_lengths_ik: torch.Tensor = None
     triplet_cosine: torch.Tensor = None
 
-    def to(self, device: torch.device | str) -> DifferentiableGraphBatch:
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> DifferentiableGraphBatch:
         fields = {
-            name: value.to(device) if isinstance(value, torch.Tensor) else value
+            name: _tensor_to(value, device, non_blocking=non_blocking)
             for name, value in self.__dict__.items()
         }
         return type(self)(**fields)
@@ -268,3 +285,20 @@ def _optional_stack_tensor(values: Sequence[np.ndarray] | None) -> torch.Tensor 
     if values is None:
         return None
     return torch.tensor(np.stack(values, axis=0), dtype=torch.float32)
+
+
+def _tensor_to(
+    value,
+    device: torch.device | str,
+    *,
+    non_blocking: bool,
+):
+    if isinstance(value, torch.Tensor):
+        return value.to(device, non_blocking=non_blocking)
+    return value
+
+
+def _pin_memory(value):
+    if isinstance(value, torch.Tensor) and not value.is_cuda and torch.cuda.is_available():
+        return value.pin_memory()
+    return value
