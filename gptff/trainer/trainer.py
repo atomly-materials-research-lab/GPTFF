@@ -140,7 +140,18 @@ def build_weight_decay_param_groups(
 
 
 def _exclude_from_weight_decay(name: str, param: torch.nn.Parameter) -> bool:
-    return name.endswith(".bias") or param.ndim == 1 or "residual_scale" in name
+    no_decay_prefixes = (
+        "atom_embedding.",
+        "geometry_embedding.",
+        "readout.",
+    )
+    return (
+        name.endswith(".bias")
+        or param.ndim == 1
+        or "residual_scale" in name
+        or "element_ref" in name
+        or name.startswith(no_decay_prefixes)
+    )
 
 
 def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Optimizer:

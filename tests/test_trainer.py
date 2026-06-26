@@ -300,9 +300,25 @@ def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
         id(named_params["interactions.0.attention_density_scale.residual_scale"])
         in no_decay_param_ids
     )
+    assert id(named_params["atom_embedding.embedding.weight"]) in no_decay_param_ids
+    assert (
+        id(named_params["geometry_embedding.edge_embedding.edge_embedding.0.weight"])
+        in no_decay_param_ids
+    )
+    assert (
+        id(named_params["geometry_embedding.edge_modulation.atom_message_weight.weight"])
+        in no_decay_param_ids
+    )
+    assert id(named_params["readout.output_layer.weight"]) in no_decay_param_ids
     assert id(named_params["interactions.0.atom_norm.weight"]) in no_decay_param_ids
     assert id(named_params["interactions.0.edge_update.message_gate.value.bias"]) in no_decay_param_ids
     assert id(named_params["interactions.0.edge_update.message_gate.value.weight"]) in decay_param_ids
+    assert id(named_params["interactions.0.three_body.target_encoder.output_layer.weight"]) in (
+        decay_param_ids
+    )
+    assert id(named_params["interactions.0.atom_attention.score.output_layer.weight"]) in (
+        decay_param_ids
+    )
     assert decay_param_ids.isdisjoint(no_decay_param_ids)
     assert decay_param_ids | no_decay_param_ids == trainable_param_ids
 
