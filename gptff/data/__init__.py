@@ -15,6 +15,7 @@ from gptff.data.loaders import (
     load_training_dataset,
 )
 from gptff.data.sharded_graph import (
+    HDF5GraphShardDataset,
     ShardedGraphDataset,
     ShardedGraphDatasetWriter,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "DistributedSequentialSampler",
     "GraphDataset",
     "GraphDatasetSplits",
+    "HDF5GraphShardDataset",
     "ShardedGraphDataset",
     "ShardedGraphDatasetWriter",
     "apply_fitted_element_refs",

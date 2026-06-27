@@ -53,10 +53,7 @@ def load_training_dataset(config: TrainingConfig) -> AtomicDataset | ShardedGrap
     if config.dataset_format == "atomic_json":
         return AtomicDataset.from_file(config.dataset_path)
     if config.dataset_format == "sharded_hdf5_graph":
-        dataset = ShardedGraphDataset(
-            config.dataset_path,
-            max_open_files=config.max_open_files,
-        )
+        dataset = ShardedGraphDataset(config.dataset_path)
         _validate_sharded_dataset_cutoffs(dataset, config)
         return dataset
     raise ValueError(f"Unsupported data.dataset_format: {config.dataset_format!r}")

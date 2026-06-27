@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import shutil
-from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,33 +69,51 @@ class ShardedGraphDataset(Dataset):
         *,
         records: Sequence[ShardedGraphIndexRecord] | None = None,
         metadata: Mapping[str, Any] | None = None,
-        max_open_files: int | None = None,
     ) -> None:
         self.root = Path(root)
         self.metadata = dict(load_sharded_graph_metadata(self.root) if metadata is None else metadata)
         self.records = tuple(load_sharded_graph_index(self.root) if records is None else records)
         if not self.records:
             raise ValueError("ShardedGraphDataset must contain at least one sample.")
-        self.max_open_files = (
-            None if max_open_files is None else _positive_int(max_open_files, "max_open_files")
-        )
-        self._files: OrderedDict[str, h5py.File] = OrderedDict()
+        self._shard_datasets, self._lookup = self._build_shard_datasets()
 
     def __getstate__(self):
         state = dict(self.__dict__)
-        state["_files"] = OrderedDict()
         return state
 
     def __len__(self) -> int:
         return len(self.records)
 
     def __getitem__(self, index: int) -> GraphSample:
-        record = self.records[int(index)]
+        shard_index, local_index = self._lookup[int(index)]
         try:
-            group = self._file(record.shard)[record.group]
-            return read_graph_sample_group(group)
+            return self._shard_datasets[shard_index][local_index]
         except Exception as exc:
+            record = self.records[int(index)]
             raise ValueError(f"Failed to load graph sample '{record.sample_id}'.") from exc
+
+    def _build_shard_datasets(
+        self,
+    ) -> tuple[tuple[HDF5GraphShardDataset, ...], tuple[tuple[int, int], ...]]:
+        records_by_shard: dict[str, list[tuple[int, ShardedGraphIndexRecord]]] = {}
+        for global_index, record in enumerate(self.records):
+            records_by_shard.setdefault(record.shard, []).append((global_index, record))
+
+        shard_datasets = []
+        lookup: list[tuple[int, int] | None] = [None] * len(self.records)
+        for shard_index, (shard, indexed_records) in enumerate(records_by_shard.items()):
+            local_records = tuple(record for _, record in indexed_records)
+            shard_datasets.append(
+                HDF5GraphShardDataset(
+                    root=self.root,
+                    shard=shard,
+                    records=local_records,
+                )
+            )
+            for local_index, (global_index, _) in enumerate(indexed_records):
+                lookup[global_index] = (shard_index, local_index)
+
+        return tuple(shard_datasets), tuple(_require_lookup_entry(entry) for entry in lookup)
 
     def subset(
         self,
@@ -111,7 +128,6 @@ class ShardedGraphDataset(Dataset):
             self.root,
             records=tuple(self.records[int(index)] for index in indices),
             metadata=metadata,
-            max_open_files=self.max_open_files,
         )
 
     def sample_key(self, index: int) -> str:
@@ -130,26 +146,50 @@ class ShardedGraphDataset(Dataset):
         )
 
     def close(self) -> None:
-        for file in self._files.values():
-            file.close()
-        self._files.clear()
+        for shard_dataset in self._shard_datasets:
+            shard_dataset.close()
 
-    def _file(self, relative_path: str) -> h5py.File:
-        file = self._files.get(relative_path)
-        if file is None:
-            file = h5py.File(self.root / relative_path, "r")
-            self._files[relative_path] = file
-            self._evict_open_files()
-            return file
-        self._files.move_to_end(relative_path)
-        return file
 
-    def _evict_open_files(self) -> None:
-        if self.max_open_files is None:
-            return
-        while len(self._files) > self.max_open_files:
-            _, file = self._files.popitem(last=False)
-            file.close()
+class HDF5GraphShardDataset(Dataset):
+    """Lazy view of one HDF5 graph shard."""
+
+    def __init__(
+        self,
+        *,
+        root: PathLike,
+        shard: str,
+        records: Sequence[ShardedGraphIndexRecord],
+    ) -> None:
+        self.root = Path(root)
+        self.shard = str(shard)
+        self.records = tuple(records)
+        if not self.records:
+            raise ValueError("HDF5GraphShardDataset must contain at least one sample.")
+        self._file: h5py.File | None = None
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_file"] = None
+        return state
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> GraphSample:
+        record = self.records[int(index)]
+        group = self.file[record.group]
+        return read_graph_sample_group(group)
+
+    @property
+    def file(self) -> h5py.File:
+        if self._file is None:
+            self._file = h5py.File(self.root / self.shard, "r")
+        return self._file
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
 
 
 class ShardedGraphDatasetWriter:
@@ -161,7 +201,7 @@ class ShardedGraphDatasetWriter:
         *,
         name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        shard_size: int = 5000,
+        samples_per_shard: int,
         overwrite: bool = False,
     ) -> None:
         self.root = Path(root)
@@ -174,7 +214,7 @@ class ShardedGraphDatasetWriter:
         self.shards_dir.mkdir()
         self.name = name
         self.metadata = dict(metadata or {})
-        self.shard_size = _positive_int(shard_size, "shard_size")
+        self.samples_per_shard = _positive_int(samples_per_shard, "samples_per_shard")
         self.sample_count = 0
         self.shard_count = 0
         self._current_file: h5py.File | None = None
@@ -239,7 +279,7 @@ class ShardedGraphDatasetWriter:
                 "format": "gptff_sharded_hdf5_graph",
                 "num_samples": self.sample_count,
                 "num_shards": self.shard_count,
-                "shard_size": self.shard_size,
+                "samples_per_shard": self.samples_per_shard,
             },
         )
 
@@ -251,7 +291,7 @@ class ShardedGraphDatasetWriter:
         shutil.rmtree(self.root, ignore_errors=True)
 
     def _ensure_shard(self) -> str:
-        if self.sample_count % self.shard_size == 0:
+        if self.sample_count % self.samples_per_shard == 0:
             if self._current_file is not None:
                 self._current_file.close()
             shard_name = f"shard_{self.shard_count:06d}.h5"
@@ -276,6 +316,12 @@ class ShardedGraphDatasetWriter:
             f"All graphs in a sharded dataset must use the same {key}; "
             f"metadata has {expected:g}, graph has {actual:g}."
         )
+
+
+def _require_lookup_entry(entry: tuple[int, int] | None) -> tuple[int, int]:
+    if entry is None:
+        raise RuntimeError("Internal sharded dataset lookup construction failed.")
+    return entry
 
 
 def write_graph_sample_group(

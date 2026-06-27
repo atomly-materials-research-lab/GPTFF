@@ -7,6 +7,7 @@ from gptff.data import (
     AtomicSample,
     DistributedSequentialSampler,
     GraphDataset,
+    HDF5GraphShardDataset,
     ShardedGraphDataset,
     ShardedGraphDatasetWriter,
     build_graph_datasets,
@@ -164,7 +165,7 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
     converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
     output = tmp_path / "graphs.gptff"
 
-    with ShardedGraphDatasetWriter(output, name="graphs", shard_size=1) as writer:
+    with ShardedGraphDatasetWriter(output, name="graphs", samples_per_shard=1) as writer:
         for sample in atomic_dataset:
             writer.add(
                 graph=converter.convert(sample.structure),
@@ -175,23 +176,21 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
                 material_id=sample.material_id,
             )
 
-    dataset = ShardedGraphDataset(output, max_open_files=1)
+    dataset = ShardedGraphDataset(output)
     subset = dataset.subset([1], name="validation")
     sample = subset[0]
     _ = dataset[0]
     _ = dataset[1]
-    unlimited = ShardedGraphDataset(output)
-    _ = unlimited[0]
-    _ = unlimited[1]
 
     assert len(dataset) == 2
     assert len(subset) == 1
-    assert dataset.max_open_files == 1
-    assert subset.max_open_files == 1
-    assert len(dataset._files) == 1
-    assert unlimited.max_open_files is None
-    assert len(unlimited._files) == 2
+    assert len(dataset._shard_datasets) == 2
+    assert all(isinstance(shard, HDF5GraphShardDataset) for shard in dataset._shard_datasets)
+    assert [shard._file is not None for shard in dataset._shard_datasets] == [True, True]
+    dataset.close()
+    assert all(shard._file is None for shard in dataset._shard_datasets)
     assert dataset.metadata["num_shards"] == 2
+    assert dataset.metadata["samples_per_shard"] == 1
     assert dataset.metadata["radial_cutoff"] == pytest.approx(2.0)
     assert dataset.metadata["angle_cutoff"] == pytest.approx(2.0)
     assert subset.sample_key(0) == "frame-1"
@@ -211,7 +210,7 @@ def test_sharded_graph_dataset_element_ref_records_do_not_load_graphs(tmp_path):
     converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
     output = tmp_path / "graphs.gptff"
 
-    with ShardedGraphDatasetWriter(output, shard_size=2) as writer:
+    with ShardedGraphDatasetWriter(output, samples_per_shard=2) as writer:
         for sample in atomic_dataset:
             writer.add(
                 graph=converter.convert(sample.structure),
@@ -235,7 +234,7 @@ def test_sharded_graph_dataset_writer_rejects_mixed_cutoffs(tmp_path):
     output = tmp_path / "graphs.gptff"
     sample = _sample(0)
 
-    with ShardedGraphDatasetWriter(output, shard_size=2) as writer:
+    with ShardedGraphDatasetWriter(output, samples_per_shard=2) as writer:
         writer.add(
             graph=first_converter.convert(sample.structure),
             energy=sample.energy,
@@ -263,7 +262,7 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
         output,
         name="graphs",
         metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
-        shard_size=2,
+        samples_per_shard=2,
     ) as writer:
         for index in range(6):
             sample = _sample(index, material_id=f"material-{index // 2}")
@@ -293,7 +292,6 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     batch = next(iter(loaders.train))
 
     assert isinstance(dataset, ShardedGraphDataset)
-    assert dataset.max_open_files == config.max_open_files
     assert isinstance(splits.train, ShardedGraphDataset)
     assert len(splits.train) == 2
     assert len(splits.validation) == 2
@@ -315,7 +313,7 @@ def test_build_loaders_respects_persistent_workers_config(tmp_path):
     with ShardedGraphDatasetWriter(
         output,
         metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
-        shard_size=2,
+        samples_per_shard=2,
     ) as writer:
         for index in range(4):
             sample = _sample(index)
@@ -354,7 +352,7 @@ def test_build_loaders_uses_distributed_samplers_without_eval_padding(tmp_path):
     with ShardedGraphDatasetWriter(
         output,
         metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
-        shard_size=2,
+        samples_per_shard=2,
     ) as writer:
         for index in range(6):
             sample = _sample(index, material_id=f"material-{index // 2}")
@@ -398,7 +396,7 @@ def test_load_training_dataset_rejects_sharded_cutoff_mismatch(tmp_path):
     with ShardedGraphDatasetWriter(
         output,
         metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
-        shard_size=1,
+        samples_per_shard=1,
     ) as writer:
         writer.add(
             graph=converter.convert(sample.structure),

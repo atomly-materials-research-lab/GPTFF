@@ -195,7 +195,9 @@ When `training.distributed: auto`, GPTFF automatically enables DDP under
 0, while all ranks participate in validation and testing.
 
 Large datasets can also be stored as precomputed sharded graph datasets. This
-avoids keeping all structures or graphs in memory during training:
+avoids keeping all structures or graphs in memory during training. GPTFF stores
+large precomputed graph datasets as multiple HDF5 shards; MPtrj conversion uses
+`--num-process` to control the number of output shard files:
 
 ```yaml
 data:
@@ -258,8 +260,9 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `num_workers`: Number of DataLoader workers per process. With DDP, total
   workers are `num_workers * world_size`.
 - `persistent_workers`: If true, keep DataLoader workers alive across epochs.
-  The default is false, which is safer for large sharded HDF5 datasets because
-  worker-local file handles and HDF5 caches are released at epoch boundaries.
+  The default is false. For large sharded HDF5 graph datasets converted with a
+  controlled shard count, enabling persistent workers can improve throughput by
+  keeping HDF5 file handles and metadata caches warm across epochs.
 - `device`: `cpu` or `cuda`
 - `amp`: If true, enable CUDA automatic mixed precision during training
 - `output_dir`: Directory for checkpoints and `history.csv`

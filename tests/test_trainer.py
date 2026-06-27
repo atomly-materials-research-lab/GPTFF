@@ -66,7 +66,6 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.group_by_material is False
     assert config.cache_graphs is True
     assert config.graph_cache_size == 16
-    assert config.max_open_files is None
     assert config.element_references.source == {"1": -1.0, "3": 2.0}
     assert config.element_refs == {"1": -1.0, "3": 2.0}
     assert config.num_readout_layers == 4
@@ -86,7 +85,6 @@ def test_trainer_config_parses_sections_without_side_effects():
     checkpoint_config = config.checkpoint_dict()
     assert checkpoint_config["data"]["dataset_path"] == "dataset.json"
     assert checkpoint_config["data"]["dataset_format"] == "atomic_json"
-    assert checkpoint_config["data"]["max_open_files"] is None
     assert checkpoint_config["model"]["element_refs"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["element_references"]["source"] == {"1": -1.0, "3": 2.0}
     assert checkpoint_config["logging"]["wandb"]["enabled"] is True
@@ -158,14 +156,20 @@ def test_element_reference_file_requires_atomic_number_keys(tmp_path):
 
 def test_training_config_builds_split_config_from_data_fields():
     raw_config = _raw_config()
-    raw_config["data"]["max_open_files"] = 32
     config = TrainingConfig.from_dict(raw_config)
 
     assert config.validation_fraction == pytest.approx(0.5)
     assert config.test_fraction == pytest.approx(0.0)
     assert config.split_seed == 42
     assert config.group_by_material is False
-    assert config.max_open_files == 32
+
+
+def test_training_config_rejects_removed_max_open_files():
+    raw_config = _raw_config()
+    raw_config["data"]["max_open_files"] = 32
+
+    with pytest.raises(ValueError, match="max_open_files has been removed"):
+        TrainingConfig.from_dict(raw_config)
 
 
 def test_training_config_parses_sharded_graph_dataset_format():

@@ -2,6 +2,11 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+from pymatgen.core import Lattice, Structure
+
+from gptff.data import ShardedGraphDataset
 
 
 def test_iter_mptrj_frames_streams_nested_frames(tmp_path):
@@ -52,6 +57,56 @@ def test_iter_mptrj_frames_respects_max_materials(tmp_path):
     assert [(frame.material_id, frame.frame_id) for frame in frames] == [
         ("mp-a", "frame-0")
     ]
+
+
+def test_convert_to_sharded_hdf5_uses_num_process_for_shard_count(tmp_path):
+    converter = _load_mptrj_converter()
+    input_path = tmp_path / "mptrj.json"
+    output_path = tmp_path / "mptrj.gptff"
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]]).as_dict()
+    input_path.write_text(
+        json.dumps(
+            {
+                "mp-a": {
+                    f"frame-{idx}": {
+                        "structure": structure,
+                        "corrected_total_energy": -float(idx),
+                        "force": [[0.0, 0.0, 0.0]],
+                        "stress": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    }
+                    for idx in range(5)
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    converter.convert_to_sharded_hdf5_graph(
+        SimpleNamespace(
+            input=input_path,
+            output=output_path,
+            name="small-mptrj",
+            metadata="compact",
+            energy_key="corrected_total_energy",
+            allow_missing_stress=False,
+            skip_invalid=False,
+            limit=None,
+            max_materials=None,
+            radial_cutoff=2.0,
+            angle_cutoff=2.0,
+            num_process=3,
+            num_samples=None,
+            overwrite=False,
+        )
+    )
+
+    dataset = ShardedGraphDataset(output_path)
+
+    assert len(dataset) == 5
+    assert dataset.metadata["num_process"] == 3
+    assert dataset.metadata["samples_per_shard"] == 2
+    assert dataset.metadata["num_shards"] == 3
+    assert len(dataset._shard_datasets) == 3
 
 
 def _load_mptrj_converter():

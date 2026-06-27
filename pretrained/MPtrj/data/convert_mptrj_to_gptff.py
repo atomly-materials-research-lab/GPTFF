@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 import shutil
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -145,10 +146,16 @@ def parse_args() -> argparse.Namespace:
         help="Angle graph cutoff for sharded-hdf5-graph output. Default: 4.0.",
     )
     parser.add_argument(
-        "--shard-size",
+        "--num-process",
         type=int,
-        default=5000,
-        help="Number of graph samples per HDF5 shard. Default: 5000.",
+        default=64,
+        help="Number of HDF5 graph shard files to create. Default: 64.",
+    )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=None,
+        help="Known number of input frames. If omitted, the converter counts frames first.",
     )
     parser.add_argument(
         "--overwrite",
@@ -258,6 +265,8 @@ def convert_to_sharded_hdf5_graph(args: argparse.Namespace) -> None:
     converted = 0
     skipped = 0
     materials_seen = 0
+    expected_frames = expected_frame_count(args)
+    samples_per_shard = math.ceil(expected_frames / args.num_process)
     output_tmp = temporary_output_path(args.output)
     converter = CrystalGraphConverter(
         radial_cutoff=args.radial_cutoff,
@@ -287,11 +296,18 @@ def convert_to_sharded_hdf5_graph(args: argparse.Namespace) -> None:
                 "stress_input_convention": "raw VASP stress",
                 "radial_cutoff": args.radial_cutoff,
                 "angle_cutoff": args.angle_cutoff,
+                "num_process": args.num_process,
+                "expected_num_samples": expected_frames,
             },
-            shard_size=args.shard_size,
+            samples_per_shard=samples_per_shard,
             overwrite=True,
         ) as writer:
-            with tqdm(desc="Converting MPtrj", unit="frame", dynamic_ncols=True) as progress:
+            with tqdm(
+                desc="Converting MPtrj",
+                unit="frame",
+                dynamic_ncols=True,
+                total=expected_frames,
+            ) as progress:
                 for record in iter_mptrj_frames(args.input, max_materials=args.max_materials):
                     materials_seen = max(materials_seen, record.material_index)
                     if args.limit is not None and converted >= args.limit:
@@ -336,6 +352,7 @@ def convert_to_sharded_hdf5_graph(args: argparse.Namespace) -> None:
                 num_converted=converted,
                 num_skipped=skipped,
                 num_materials_read=materials_seen,
+                samples_per_shard=samples_per_shard,
             )
         if args.output.exists():
             if args.output.is_dir():
@@ -351,6 +368,41 @@ def convert_to_sharded_hdf5_graph(args: argparse.Namespace) -> None:
     print(f"Read {materials_seen} material groups.")
     if skipped:
         print(f"Skipped {skipped} invalid frames.")
+
+
+def expected_frame_count(args: argparse.Namespace) -> int:
+    if args.num_process <= 0:
+        raise ValueError("--num-process must be positive.")
+    if args.num_samples is not None:
+        if args.num_samples <= 0:
+            raise ValueError("--num-samples must be positive.")
+        count = int(args.num_samples)
+        if args.limit is not None:
+            count = min(count, int(args.limit))
+        return count
+    return count_mptrj_frames(
+        args.input,
+        max_materials=args.max_materials,
+        limit=args.limit,
+    )
+
+
+def count_mptrj_frames(
+    path: Path,
+    *,
+    max_materials: int | None = None,
+    limit: int | None = None,
+) -> int:
+    count = 0
+    with tqdm(desc="Counting MPtrj", unit="frame", dynamic_ncols=True) as progress:
+        for _ in iter_mptrj_frames(path, max_materials=max_materials):
+            count += 1
+            progress.update()
+            if limit is not None and count >= limit:
+                break
+    if count == 0:
+        raise ValueError("No MPtrj frames were found.")
+    return count
 
 
 def write_dataset_header(output_file) -> None:
