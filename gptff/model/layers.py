@@ -455,7 +455,9 @@ class AttentionAtomUpdate(nn.Module):
             edge_basis,
             edge_cutoff,
         )
-        center_context = atom_features * torch.tanh(density_features[:, :1])
+        smooth_degree = density_features[:, :1]
+        attention_aggregate = attention_aggregate * smooth_degree
+        center_context = atom_features * torch.tanh(smooth_degree)
         density_context = self.density_context(density_features)
         scaled_attention = attention_aggregate * self.density_context.compute_scale(
             density_context
