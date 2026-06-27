@@ -80,6 +80,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.seed == 42
     assert config.deterministic is True
     assert config.distributed == "auto"
+    assert config.persistent_workers is False
     assert config.logging.wandb.enabled is True
     assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
@@ -92,6 +93,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert checkpoint_config["optimizer"]["learning_rate"] == pytest.approx(1e-3)
     assert checkpoint_config["training"]["batch_size"] == 4
     assert checkpoint_config["training"]["distributed"] == "auto"
+    assert checkpoint_config["training"]["persistent_workers"] is False
     assert checkpoint_config["loss"]["force_loss_weight"] == pytest.approx(1.0)
 
 
@@ -207,6 +209,16 @@ def test_training_config_defaults_num_workers_to_four():
     config = TrainingConfig.from_dict(raw_config)
 
     assert config.training.num_workers == 4
+
+
+def test_training_config_parses_persistent_workers():
+    raw_config = _canonical_config()
+    raw_config["training"]["persistent_workers"] = True
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.training.persistent_workers is True
+    assert config.persistent_workers is True
 
 
 def test_training_config_parses_distributed_modes():

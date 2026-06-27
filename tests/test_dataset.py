@@ -308,6 +308,45 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     assert batch.angle_cutoff == pytest.approx(2.0)
 
 
+def test_build_loaders_respects_persistent_workers_config(tmp_path):
+    converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
+    output = tmp_path / "graphs.gptff"
+
+    with ShardedGraphDatasetWriter(
+        output,
+        metadata={"radial_cutoff": 2.0, "angle_cutoff": 2.0},
+        shard_size=2,
+    ) as writer:
+        for index in range(4):
+            sample = _sample(index)
+            writer.add(
+                graph=converter.convert(sample.structure),
+                energy=sample.energy,
+                forces=sample.forces,
+                stress=sample.stress,
+                sample_id=sample.sample_id,
+                material_id=sample.material_id,
+            )
+
+    config = _sharded_training_config(
+        output,
+        validation_fraction=0.25,
+        persistent_workers=True,
+        num_workers=1,
+    )
+    dataset = load_training_dataset(config)
+    splits = build_graph_datasets(dataset, config)
+
+    loaders = build_loaders(
+        config,
+        splits,
+        generators=create_data_loader_generators(config.seed),
+    )
+
+    assert loaders.train.persistent_workers is True
+    assert loaders.validation.persistent_workers is True
+
+
 def test_build_loaders_uses_distributed_samplers_without_eval_padding(tmp_path):
     converter = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0)
     output = tmp_path / "graphs.gptff"
@@ -490,6 +529,8 @@ def _sharded_training_config(
     validation_fraction=0.5,
     test_fraction=0.0,
     group_by_material=False,
+    num_workers=0,
+    persistent_workers=False,
 ):
     return TrainingConfig.from_dict(
         {
@@ -512,7 +553,8 @@ def _sharded_training_config(
             "training": {
                 "epochs": 1,
                 "batch_size": 2,
-                "num_workers": 0,
+                "num_workers": num_workers,
+                "persistent_workers": persistent_workers,
                 "device": "cpu",
             },
             "loss": {

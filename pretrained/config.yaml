@@ -33,6 +33,7 @@ training:
   epochs: 100
   batch_size: 128
   num_workers: 4
+  persistent_workers: false
   device: cuda
   amp: false
   output_dir: .

@@ -153,7 +153,7 @@ def build_loaders(
         "worker_init_fn": seed_data_loader_worker,
     }
     if config.num_workers > 0:
-        common["persistent_workers"] = True
+        common["persistent_workers"] = config.persistent_workers
         common["prefetch_factor"] = 2
     train_sampler = None
     if distributed.enabled:

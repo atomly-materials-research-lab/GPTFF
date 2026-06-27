@@ -55,6 +55,7 @@ class TrainingLoopConfig:
     batch_size: int
     device: str
     num_workers: int = 4
+    persistent_workers: bool = False
     amp: bool = False
     output_dir: str = "."
     grad_clip_norm: float = 10.0
@@ -215,6 +216,7 @@ class TrainingConfig:
                 batch_size=int(training["batch_size"]),
                 device=str(training["device"]),
                 num_workers=int(_config_value(training, "num_workers", "workers", default=4)),
+                persistent_workers=bool(training.get("persistent_workers", False)),
                 amp=bool(training.get("amp", False)),
                 output_dir=str(training.get("output_dir", raw_config.get("output_dir", "."))),
                 grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
@@ -316,6 +318,10 @@ class TrainingConfig:
     @property
     def num_workers(self) -> int:
         return self.training.num_workers
+
+    @property
+    def persistent_workers(self) -> bool:
+        return self.training.persistent_workers
 
     @property
     def device(self) -> str:
