@@ -73,7 +73,6 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.model.atom_attention.enabled is True
     assert config.model.atom_attention.density_scale_init == pytest.approx(0.1)
-    assert config.model.atom_attention.residual_scale_init == pytest.approx(1e-2)
     assert config.model.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert config.amp is False
     assert config.seed == 42
@@ -310,12 +309,11 @@ def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
     named_params = dict(model.named_parameters())
     trainable_param_ids = {id(param) for param in model.parameters() if param.requires_grad}
 
-    assert id(named_params["interactions.0.attention_residual_scale"]) in no_decay_param_ids
-    assert id(named_params["interactions.0.attention_ffn_residual_scale"]) in no_decay_param_ids
     assert (
-        id(named_params["interactions.0.attention_density_scale.residual_scale"])
+        id(named_params["interactions.0.atom_update.density_context.density_scale"])
         in no_decay_param_ids
     )
+    assert id(named_params["interactions.0.atom_ffn_residual_scale"]) in no_decay_param_ids
     assert id(named_params["atom_embedding.embedding.weight"]) in no_decay_param_ids
     assert (
         id(named_params["geometry_embedding.edge_embedding.edge_embedding.0.weight"])
@@ -332,7 +330,7 @@ def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
     assert id(named_params["interactions.0.three_body.target_encoder.output_layer.weight"]) in (
         decay_param_ids
     )
-    assert id(named_params["interactions.0.atom_attention.score.output_layer.weight"]) in (
+    assert id(named_params["interactions.0.atom_update.score.output_layer.weight"]) in (
         decay_param_ids
     )
     assert decay_param_ids.isdisjoint(no_decay_param_ids)
@@ -410,7 +408,6 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.interaction_dropout == pytest.approx(0.1)
     assert model_config.atom_attention.enabled is True
     assert model_config.atom_attention.density_scale_init == pytest.approx(0.1)
-    assert model_config.atom_attention.residual_scale_init == pytest.approx(1e-2)
     assert model_config.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert model_config.element_refs == {"1": -1.0, "3": 2.0}
     assert "batch_size" not in model_config.to_dict()
@@ -800,7 +797,6 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["atom_attention"]["enabled"] is True
     assert state["model_config"]["atom_attention"]["density_scale_init"] == pytest.approx(0.1)
-    assert state["model_config"]["atom_attention"]["residual_scale_init"] == pytest.approx(1e-2)
     assert state["model_config"]["atom_attention"]["ffn_residual_scale_init"] == pytest.approx(
         1e-2
     )
@@ -1123,7 +1119,6 @@ def _canonical_config():
                 "use_ffn": True,
                 "ffn_hidden_dim": None,
                 "density_scale_init": 0.1,
-                "residual_scale_init": 1e-2,
                 "ffn_residual_scale_init": 1e-2,
             },
         },

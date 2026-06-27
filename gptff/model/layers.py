@@ -280,7 +280,7 @@ class RadialDensityFeatures(nn.Module):
         return torch.cat([continuous_degree, radial_density], dim=-1)
 
 
-class DensityAttentionScale(nn.Module):
+class DensityContext(nn.Module):
     def __init__(
         self,
         density_feature_dim,
@@ -295,20 +295,19 @@ class DensityAttentionScale(nn.Module):
         if dropout < 0 or dropout >= 1:
             raise ValueError("dropout must be in the range [0, 1).")
 
-        self.residual_scale = nn.Parameter(torch.tensor(float(scale_init)))
+        self.density_scale = nn.Parameter(torch.tensor(float(scale_init)))
         self.hidden = nn.Linear(density_feature_dim, atom_feature_dim, bias=False)
         self.output = nn.Linear(atom_feature_dim, atom_feature_dim, bias=False)
         self.activation = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
 
-    def compute_scale(self, density_features):
+    def forward(self, density_features):
         density_context = self.hidden(density_features)
         density_context = self.dropout(self.activation(density_context))
-        density_context = self.output(density_context)
-        return 1.0 + self.residual_scale * torch.tanh(density_context)
+        return self.output(density_context)
 
-    def forward(self, attention_delta, density_features):
-        return attention_delta * self.compute_scale(density_features)
+    def compute_scale(self, density_context):
+        return 1.0 + self.density_scale * torch.tanh(density_context)
 
 
 def cutoff_weighted_softmax(
@@ -358,7 +357,7 @@ def cutoff_weighted_softmax(
     return weights / normalizer[indices].clamp_min(eps)
 
 
-class InvariantAtomAttention(nn.Module):
+class AttentionAtomUpdate(nn.Module):
     def __init__(
         self,
         atom_feature_dim,
@@ -367,6 +366,7 @@ class InvariantAtomAttention(nn.Module):
         *,
         num_heads=4,
         dropout=0.0,
+        density_scale_init=0.1,
     ):
         super().__init__()
         if atom_feature_dim % num_heads != 0:
@@ -374,10 +374,21 @@ class InvariantAtomAttention(nn.Module):
 
         self.atom_feature_dim = int(atom_feature_dim)
         self.edge_feature_dim = int(edge_feature_dim)
+        self.num_radial = int(num_radial)
         self.num_heads = int(num_heads)
         self.head_dim = self.atom_feature_dim // self.num_heads
         input_dim = 2 * atom_feature_dim + edge_feature_dim + num_radial
 
+        self.radial_density_features = RadialDensityFeatures(
+            atom_feature_dim=atom_feature_dim,
+            num_radial=num_radial,
+        )
+        self.density_context = DensityContext(
+            density_feature_dim=self.radial_density_features.out_dim,
+            atom_feature_dim=atom_feature_dim,
+            scale_init=density_scale_init,
+            dropout=dropout,
+        )
         self.score = MLP(
             input_dim,
             self.num_heads,
@@ -391,17 +402,21 @@ class InvariantAtomAttention(nn.Module):
             dropout=dropout,
             activate_output=True,
         )
-        self.output = nn.Linear(atom_feature_dim, atom_feature_dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
+        self.output_gate = GatedMLP(
+            3 * atom_feature_dim,
+            atom_feature_dim,
+            dropout=dropout,
+            bias=False,
+        )
 
     def forward(
         self,
         atom_features,
         edge_features,
+        edge_modulation,
         graph,
         edge_basis,
         edge_cutoff,
-        edge_modulation,
     ):
         if graph.edge_index.numel() == 0:
             return torch.zeros_like(atom_features)
@@ -428,13 +443,26 @@ class InvariantAtomAttention(nn.Module):
         values = self.value(pair_features) * edge_modulation
         values = values.reshape(-1, self.num_heads, self.head_dim)
         messages = values * attention.unsqueeze(-1)
-        aggregated = sum_aggregation(
+        attention_aggregate = sum_aggregation(
             messages.reshape(messages.shape[0], self.atom_feature_dim),
             center_indices,
             dim_size=atom_features.shape[0],
             reference=atom_features,
         )
-        return self.dropout(self.output(aggregated))
+        density_features = self.radial_density_features(
+            atom_features,
+            graph,
+            edge_basis,
+            edge_cutoff,
+        )
+        center_context = atom_features * torch.tanh(density_features[:, :1])
+        density_context = self.density_context(density_features)
+        scaled_attention = attention_aggregate * self.density_context.compute_scale(
+            density_context
+        )
+        return self.output_gate(
+            torch.cat([center_context, scaled_attention, density_context], dim=-1)
+        )
 
 
 class AtomFeedForward(nn.Module):
@@ -484,7 +512,7 @@ class InteractionBlock(nn.Module):
             _attention_config_value(
                 atom_attention_config,
                 "enabled",
-                False,
+                True,
             )
         )
         self.three_body = ThreeBodyEdgeDelta(
@@ -498,22 +526,13 @@ class InteractionBlock(nn.Module):
             edge_feature_dim,
             dropout=dropout,
         )
-        self.atom_update = AtomFeatureDelta(
-            atom_feature_dim,
-            edge_feature_dim,
-            dropout=dropout,
-        )
+        self.attention_enabled = attention_enabled
         self.pair_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.triplet_atom_norm = nn.LayerNorm(atom_feature_dim)
         self.atom_norm = nn.LayerNorm(atom_feature_dim)
-        self.radial_density_features = None
-        self.atom_attention = None
-        self.attention_density_scale = None
-        self.attention_norm = None
-        self.attention_ffn = None
-        self.attention_ffn_norm = None
-        self.attention_residual_scale = None
-        self.attention_ffn_residual_scale = None
+        self.atom_ffn = None
+        self.atom_ffn_norm = None
+        self.atom_ffn_residual_scale = None
         if attention_enabled:
             attention_dropout = float(
                 _attention_config_value(
@@ -548,13 +567,6 @@ class InteractionBlock(nn.Module):
                     0.1,
                 )
             )
-            residual_scale_init = float(
-                _attention_config_value(
-                    atom_attention_config,
-                    "residual_scale_init",
-                    1e-2,
-                )
-            )
             ffn_residual_scale_init = float(
                 _attention_config_value(
                     atom_attention_config,
@@ -562,35 +574,28 @@ class InteractionBlock(nn.Module):
                     1e-2,
                 )
             )
-            self.radial_density_features = RadialDensityFeatures(
-                atom_feature_dim=atom_feature_dim,
-                num_radial=num_radial,
-            )
-            self.atom_attention = InvariantAtomAttention(
+            self.atom_update = AttentionAtomUpdate(
                 atom_feature_dim=atom_feature_dim,
                 edge_feature_dim=edge_feature_dim,
                 num_radial=num_radial,
                 num_heads=attention_num_heads,
                 dropout=attention_dropout,
+                density_scale_init=density_scale_init,
             )
-            self.attention_density_scale = DensityAttentionScale(
-                density_feature_dim=self.radial_density_features.out_dim,
-                atom_feature_dim=atom_feature_dim,
-                scale_init=density_scale_init,
-                dropout=attention_dropout,
-            )
-            self.attention_norm = nn.LayerNorm(atom_feature_dim)
-            self.attention_residual_scale = nn.Parameter(torch.tensor(residual_scale_init))
             if use_ffn:
-                self.attention_ffn = AtomFeedForward(
+                self.atom_ffn = AtomFeedForward(
                     atom_feature_dim,
                     hidden_dim=ffn_hidden_dim,
                     dropout=attention_dropout,
                 )
-                self.attention_ffn_norm = nn.LayerNorm(atom_feature_dim)
-                self.attention_ffn_residual_scale = nn.Parameter(
-                    torch.tensor(ffn_residual_scale_init)
-                )
+                self.atom_ffn_norm = nn.LayerNorm(atom_feature_dim)
+                self.atom_ffn_residual_scale = nn.Parameter(torch.tensor(ffn_residual_scale_init))
+        else:
+            self.atom_update = AtomFeatureDelta(
+                atom_feature_dim,
+                edge_feature_dim,
+                dropout=dropout,
+            )
 
     def forward(self, atom_features, edge_features, graph, geometry_features):
         triplet_delta = self.three_body(
@@ -609,35 +614,28 @@ class InteractionBlock(nn.Module):
         )
         edge_features = edge_features + self.residual_dropout(pair_delta)
 
-        atom_delta = self.atom_update(
-            self.atom_norm(atom_features),
-            edge_features,
-            geometry_features.edge_modulation.atom_message,
-            graph,
-        )
+        normalized_atom_features = self.atom_norm(atom_features)
+        if self.attention_enabled:
+            atom_delta = self.atom_update(
+                normalized_atom_features,
+                edge_features,
+                geometry_features.edge_modulation.atom_message,
+                graph,
+                geometry_features.edge_basis,
+                geometry_features.edge_cutoff,
+            )
+        else:
+            atom_delta = self.atom_update(
+                normalized_atom_features,
+                edge_features,
+                geometry_features.edge_modulation.atom_message,
+                graph,
+            )
         atom_features = atom_features + self.residual_dropout(atom_delta)
 
-        if self.atom_attention is not None:
-            density_features = self.radial_density_features(
-                atom_features,
-                graph,
-                geometry_features.edge_basis,
-                geometry_features.edge_cutoff,
+        if self.atom_ffn is not None:
+            atom_features = (
+                atom_features
+                + self.atom_ffn_residual_scale * self.atom_ffn(self.atom_ffn_norm(atom_features))
             )
-            attention_delta = self.atom_attention(
-                self.attention_norm(atom_features),
-                edge_features,
-                graph,
-                geometry_features.edge_basis,
-                geometry_features.edge_cutoff,
-                geometry_features.edge_modulation.atom_message,
-            )
-            attention_delta = self.attention_density_scale(attention_delta, density_features)
-            atom_features = atom_features + self.attention_residual_scale * attention_delta
-            if self.attention_ffn is not None:
-                atom_features = (
-                    atom_features
-                    + self.attention_ffn_residual_scale
-                    * self.attention_ffn(self.attention_ffn_norm(atom_features))
-                )
         return atom_features, edge_features

@@ -148,6 +148,7 @@ def _exclude_from_weight_decay(name: str, param: torch.nn.Parameter) -> bool:
     return (
         name.endswith(".bias")
         or param.ndim == 1
+        or "density_scale" in name
         or "residual_scale" in name
         or "element_ref" in name
         or name.startswith(no_decay_prefixes)
