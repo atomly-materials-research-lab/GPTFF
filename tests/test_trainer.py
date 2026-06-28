@@ -72,6 +72,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.readout_atom_norm is True
     assert config.interaction_dropout == pytest.approx(0.1)
     assert config.model.atom_attention.enabled is True
+    assert config.model.atom_attention.use_ffn is False
     assert config.model.atom_attention.density_scale_init == pytest.approx(0.1)
     assert config.model.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert config.amp is False
@@ -291,6 +292,7 @@ def test_training_config_uses_optimizer_specific_weight_decay_defaults():
 
 def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
     raw_config = _raw_config()
+    raw_config["training"]["atom_attention"] = {"enabled": True, "use_ffn": True}
     raw_config["optimizer"] = {
         "name": "AdamW",
         "learning_rate": 1e-3,
@@ -407,6 +409,7 @@ def test_training_config_builds_model_config_only_from_model_fields():
     assert model_config.readout_atom_norm is True
     assert model_config.interaction_dropout == pytest.approx(0.1)
     assert model_config.atom_attention.enabled is True
+    assert model_config.atom_attention.use_ffn is False
     assert model_config.atom_attention.density_scale_init == pytest.approx(0.1)
     assert model_config.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
     assert model_config.element_refs == {"1": -1.0, "3": 2.0}
@@ -796,6 +799,7 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert "final_atom_norm" not in state["model_config"]
     assert state["model_config"]["interaction_dropout"] == pytest.approx(0.1)
     assert state["model_config"]["atom_attention"]["enabled"] is True
+    assert state["model_config"]["atom_attention"]["use_ffn"] is False
     assert state["model_config"]["atom_attention"]["density_scale_init"] == pytest.approx(0.1)
     assert state["model_config"]["atom_attention"]["ffn_residual_scale_init"] == pytest.approx(
         1e-2

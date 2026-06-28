@@ -10,7 +10,7 @@ class AtomAttentionConfig:
     enabled: bool = True
     num_heads: int = 4
     dropout: float = 0.0
-    use_ffn: bool = True
+    use_ffn: bool = False
     ffn_hidden_dim: int | None = None
     density_scale_init: float = 0.1
     ffn_residual_scale_init: float = 1e-2
@@ -41,7 +41,7 @@ class AtomAttentionConfig:
             enabled=bool(raw_config.get("enabled", True)),
             num_heads=int(raw_config.get("num_heads", 4)),
             dropout=float(raw_config.get("dropout", 0.0)),
-            use_ffn=bool(raw_config.get("use_ffn", True)),
+            use_ffn=bool(raw_config.get("use_ffn", False)),
             ffn_hidden_dim=_optional_int(raw_config.get("ffn_hidden_dim", None)),
             density_scale_init=float(raw_config.get("density_scale_init", 0.1)),
             ffn_residual_scale_init=float(raw_config.get("ffn_residual_scale_init", 1e-2)),

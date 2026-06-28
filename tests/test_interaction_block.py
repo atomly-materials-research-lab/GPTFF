@@ -46,6 +46,7 @@ def test_gptff_config_enables_atom_attention_by_default():
     )
 
     assert cfg.atom_attention.enabled is True
+    assert cfg.atom_attention.use_ffn is False
 
 
 def test_gptff_config_rejects_attention_heads_that_do_not_divide_atom_features():
@@ -386,6 +387,9 @@ def test_interaction_block_enables_radial_density_with_atom_attention():
     assert isinstance(model.interactions[0].atom_update, AttentionAtomUpdate)
     assert isinstance(model.interactions[0].atom_update.radial_density_features, RadialDensityFeatures)
     assert isinstance(model.interactions[0].atom_update.density_context, DensityContext)
+    assert model.interactions[0].atom_ffn is None
+    assert model.interactions[0].atom_ffn_norm is None
+    assert model.interactions[0].atom_ffn_residual_scale is None
 
 
 def test_attention_atom_update_replaces_sum_update_and_ffn_scales_afterward():

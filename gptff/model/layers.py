@@ -554,7 +554,7 @@ class InteractionBlock(nn.Module):
                 _attention_config_value(
                     atom_attention_config,
                     "use_ffn",
-                    True,
+                    False,
                 )
             )
             ffn_hidden_dim = _attention_config_value(

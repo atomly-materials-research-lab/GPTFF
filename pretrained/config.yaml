@@ -15,7 +15,7 @@ model:
     enabled: true
     num_heads: 4
     dropout: 0.0
-    use_ffn: true
+    use_ffn: false
     ffn_hidden_dim: null
 
 element_references:
