@@ -456,7 +456,21 @@ class AttentionAtomUpdate(nn.Module):
             edge_cutoff,
         )
         smooth_degree = density_features[:, :1]
-        attention_aggregate = attention_aggregate * smooth_degree
+        edge_cutoff_values = edge_cutoff.reshape(-1, 1).to(
+            dtype=torch.float32,
+            device=atom_features.device,
+        )
+        cutoff_square_degree = sum_aggregation(
+            edge_cutoff_values.square(),
+            center_indices,
+            dim_size=atom_features.shape[0],
+            reference=smooth_degree.float(),
+        )
+        degree_fp32 = smooth_degree.float()
+        effective_degree = (
+            degree_fp32.square() / cutoff_square_degree.clamp_min(1e-12)
+        ).to(dtype=atom_features.dtype)
+        attention_aggregate = attention_aggregate * effective_degree
         center_context = atom_features * torch.tanh(smooth_degree)
         density_context = self.density_context(density_features)
         scaled_attention = attention_aggregate * self.density_context.compute_scale(
