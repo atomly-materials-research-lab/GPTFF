@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 import torch
 import torch.nn as nn
@@ -267,7 +265,7 @@ def test_attention_atom_update_output_gate_uses_smooth_gated_center_atom_feature
     assert torch.allclose(seen_input[:, : model.atom_feature_dim], expected_center_context)
 
 
-def test_attention_atom_update_rescales_uniform_attention_to_effective_degree():
+def test_attention_atom_update_rescales_uniform_attention_to_cutoff_sum():
     graph = _batch()
     model = GPTFF(_cfg())
     features = _features(model, graph)
@@ -299,97 +297,10 @@ def test_attention_atom_update_rescales_uniform_attention_to_effective_degree():
     seen_input = attention.output_gate.seen_input
     expected_degree = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
     expected_degree.index_add_(0, graph.edge_index[0], features.edge_cutoff)
-    expected_square_degree = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
-    expected_square_degree.index_add_(0, graph.edge_index[0], features.edge_cutoff.square())
-    expected_effective_degree = expected_degree.square() / expected_square_degree.clamp_min(1e-12)
-    expected_attention_sum = expected_effective_degree.expand(-1, model.atom_feature_dim)
+    expected_attention_sum = expected_degree.expand(-1, model.atom_feature_dim)
     start = model.atom_feature_dim
     end = 2 * model.atom_feature_dim
     assert torch.allclose(seen_input[:, start:end], expected_attention_sum)
-
-
-def test_attention_atom_update_effective_degree_keeps_single_cutoff_modulation_linear():
-    model = GPTFF(_cfg())
-    atom_fea = torch.zeros((2, model.atom_feature_dim))
-    graph = SimpleNamespace(edge_index=torch.tensor([[0], [1]]))
-    edge_cutoff = torch.tensor([[0.2]], dtype=atom_fea.dtype)
-    attention = AttentionAtomUpdate(
-        atom_feature_dim=model.atom_feature_dim,
-        edge_feature_dim=model.edge_feature_dim,
-        num_radial=model.num_radial,
-        num_heads=2,
-    )
-    attention.score = _ConstantFeature(output_dim=attention.num_heads, value=0.0)
-    attention.value = _ConstantFeature(output_dim=model.atom_feature_dim, value=1.0)
-    attention.density_context.hidden.weight.data.zero_()
-    attention.density_context.output.weight.data.zero_()
-    attention.output_gate = _RecordingConstantFeature(
-        output_dim=model.atom_feature_dim,
-        value=0.0,
-    )
-
-    attention(
-        atom_fea,
-        torch.zeros((1, model.edge_feature_dim)),
-        edge_cutoff.expand(-1, model.atom_feature_dim),
-        graph,
-        torch.zeros((1, model.num_radial)),
-        edge_cutoff,
-    )
-
-    seen_input = attention.output_gate.seen_input
-    expected_attention = torch.zeros_like(atom_fea)
-    expected_attention[0] = edge_cutoff.item()
-    start = model.atom_feature_dim
-    end = 2 * model.atom_feature_dim
-    assert torch.allclose(
-        seen_input[:, start:end],
-        expected_attention,
-        rtol=2e-3,
-        atol=1e-6,
-    )
-
-
-def test_attention_atom_update_effective_degree_uses_fp32_ratio_for_float16_inputs():
-    model = GPTFF(_cfg())
-    atom_fea = torch.zeros((2, model.atom_feature_dim), dtype=torch.float16)
-    graph = SimpleNamespace(edge_index=torch.tensor([[0], [1]]))
-    edge_cutoff = torch.tensor([[0.001]], dtype=torch.float16)
-    attention = AttentionAtomUpdate(
-        atom_feature_dim=model.atom_feature_dim,
-        edge_feature_dim=model.edge_feature_dim,
-        num_radial=model.num_radial,
-        num_heads=2,
-    ).half()
-    attention.score = _ConstantFeature(output_dim=attention.num_heads, value=0.0)
-    attention.value = _ConstantFeature(output_dim=model.atom_feature_dim, value=1.0)
-    attention.density_context.hidden.weight.data.zero_()
-    attention.density_context.output.weight.data.zero_()
-    attention.output_gate = _RecordingConstantFeature(
-        output_dim=model.atom_feature_dim,
-        value=0.0,
-    )
-
-    attention(
-        atom_fea,
-        torch.zeros((1, model.edge_feature_dim), dtype=torch.float16),
-        edge_cutoff.expand(-1, model.atom_feature_dim),
-        graph,
-        torch.zeros((1, model.num_radial), dtype=torch.float16),
-        edge_cutoff,
-    )
-
-    seen_input = attention.output_gate.seen_input
-    expected_attention = torch.zeros_like(atom_fea)
-    expected_attention[0] = edge_cutoff.item()
-    start = model.atom_feature_dim
-    end = 2 * model.atom_feature_dim
-    assert torch.allclose(
-        seen_input[:, start:end],
-        expected_attention,
-        rtol=2e-3,
-        atol=1e-6,
-    )
 
 
 def test_attention_atom_update_no_edge_graph_skips_self_update():
