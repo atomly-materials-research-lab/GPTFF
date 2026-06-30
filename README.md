@@ -251,7 +251,7 @@ The file `config.yaml` uses separate sections for model, optimizer, training loo
 - `learning_rate`: Optimizer learning rate
 - `weight_decay`: Optimizer weight decay. The default is `1e-2` for `AdamW` and `0` for the other optimizers.
 - `scheduler`: Learning-rate scheduler. The default is `"CosLR"`, a cosine annealing schedule. Use `"none"` to disable scheduling.
-- `scheduler_params`: Optional scheduler parameters. For `"CosLR"`, `decay_fraction` controls `eta_min = decay_fraction * learning_rate`.
+- `scheduler_params`: Optional scheduler parameters. For `"CosLR"`, `decay_fraction` controls `eta_min = decay_fraction * learning_rate`. Set `warmup_epochs` and `warmup_start_factor` to linearly warm up from `warmup_start_factor * learning_rate` before cosine decay. The scheduler is stepped 10 times per epoch by default, so `warmup_epochs: 3` means 30 warmup scheduler steps. Set `steps_per_epoch` to override this scheduler-step frequency. If `warmup_steps` is provided directly, it is counted in scheduler steps, not optimizer steps.
 
 `training`:
 - `epochs`: Number of training epochs

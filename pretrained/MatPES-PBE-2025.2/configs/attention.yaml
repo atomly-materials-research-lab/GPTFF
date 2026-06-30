@@ -23,11 +23,13 @@ element_references:
 
 optimizer:
   name: AdamW
-  learning_rate: 0.001
+  learning_rate: 0.0007
   weight_decay: 0.01
   scheduler: CosLR
   scheduler_params:
     decay_fraction: 0.01
+    warmup_epochs: 3
+    warmup_start_factor: 0.1
 
 training:
   epochs: 100

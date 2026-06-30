@@ -49,7 +49,12 @@ from gptff.trainer.loss import (
     BatchLoss,
     compute_batch_loss,
 )
-from gptff.trainer.scheduler import Scheduler, build_lr_scheduler
+from gptff.trainer.scheduler import (
+    DEFAULT_SCHEDULER_STEPS_PER_EPOCH,
+    Scheduler,
+    build_lr_scheduler,
+    scheduler_steps_per_epoch,
+)
 from gptff.utils.reproducibility import (
     configure_reproducibility,
     create_data_loader_generators,
@@ -182,7 +187,10 @@ def build_scheduler(
     )
 
 
-def scheduler_step_batches(num_batches: int, steps_per_epoch: int = 10) -> set[int]:
+def scheduler_step_batches(
+    num_batches: int,
+    steps_per_epoch: int = DEFAULT_SCHEDULER_STEPS_PER_EPOCH,
+) -> set[int]:
     if num_batches <= 0 or steps_per_epoch <= 0:
         return set()
     return {
@@ -304,7 +312,14 @@ def train_one_epoch(
     distributed = distributed or DistributedContext.disabled(device=config.device)
     model.train()
     metrics = EpochMetrics.create()
-    scheduler_batches = scheduler_step_batches(len(train_loader))
+    scheduler_batches = (
+        scheduler_step_batches(
+            len(train_loader),
+            steps_per_epoch=scheduler_steps_per_epoch(config.scheduler_params),
+        )
+        if scheduler is not None
+        else set()
+    )
 
     progress = _progress_iterator(
         train_loader,

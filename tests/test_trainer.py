@@ -35,6 +35,7 @@ from gptff.trainer.logger import (
     WandBLogger,
 )
 from gptff.trainer.loss import BatchLoss
+from gptff.trainer.scheduler import build_lr_scheduler, scheduler_steps_per_epoch
 from gptff.trainer.trainer import (
     AverageMeter,
     EpochMetrics,
@@ -44,6 +45,7 @@ from gptff.trainer.trainer import (
     compute_batch_loss,
     has_nonfinite_loss,
     save_checkpoint,
+    scheduler_step_batches,
     should_skip_optimizer_step,
     sync_epoch_metrics,
     use_cuda_amp,
@@ -206,6 +208,23 @@ def test_training_config_parses_canonical_sections_without_legacy_keys():
     }
 
 
+def test_training_config_preserves_scheduler_warmup_params():
+    raw_config = _canonical_config()
+    raw_config["optimizer"]["scheduler_params"] = {
+        "decay_fraction": 0.01,
+        "warmup_epochs": 3,
+        "warmup_start_factor": 0.1,
+    }
+
+    config = TrainingConfig.from_dict(raw_config)
+
+    assert config.optimizer.scheduler_params["warmup_epochs"] == 3
+    assert config.optimizer.scheduler_params["warmup_start_factor"] == pytest.approx(0.1)
+    assert config.checkpoint_dict()["optimizer"]["scheduler_params"][
+        "warmup_epochs"
+    ] == 3
+
+
 def test_training_config_defaults_num_workers_to_four():
     raw_config = _canonical_config()
     raw_config["training"].pop("num_workers")
@@ -223,6 +242,75 @@ def test_training_config_parses_persistent_workers():
 
     assert config.training.persistent_workers is True
     assert config.persistent_workers is True
+
+
+def test_coslr_warmup_linearly_reaches_base_lr_before_cosine_decay():
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    scheduler = build_lr_scheduler(
+        optimizer,
+        scheduler="CosLR",
+        learning_rate=1e-3,
+        epochs=10,
+        scheduler_params={
+            "decay_fraction": 0.01,
+            "steps_per_epoch": 10,
+            "warmup_epochs": 0.3,
+            "warmup_start_factor": 0.1,
+        },
+    )
+
+    assert scheduler is not None
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+
+    def step_scheduler() -> None:
+        optimizer.step()
+        scheduler.step()
+
+    step_scheduler()
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(4e-4)
+
+    step_scheduler()
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(7e-4)
+
+    step_scheduler()
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(1e-3)
+
+    step_scheduler()
+    assert optimizer.param_groups[0]["lr"] < 1e-3
+
+
+def test_configured_scheduler_steps_per_epoch_controls_train_step_batches():
+    raw_config = _canonical_config()
+    raw_config["optimizer"]["scheduler_params"] = {
+        "decay_fraction": 0.01,
+        "steps_per_epoch": 4,
+        "warmup_epochs": 1,
+    }
+    config = TrainingConfig.from_dict(raw_config)
+
+    steps_per_epoch = scheduler_steps_per_epoch(config.scheduler_params)
+
+    assert steps_per_epoch == 4
+    assert scheduler_step_batches(10, steps_per_epoch=steps_per_epoch) == {3, 5, 8, 10}
+
+
+def test_coslr_rejects_warmup_that_covers_full_schedule():
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    with pytest.raises(ValueError, match="warmup_steps must be smaller than T_max"):
+        build_lr_scheduler(
+            optimizer,
+            scheduler="CosLR",
+            learning_rate=1e-3,
+            epochs=1,
+            scheduler_params={
+                "steps_per_epoch": 10,
+                "warmup_epochs": 1,
+            },
+        )
 
 
 def test_training_config_parses_distributed_modes():
