@@ -39,6 +39,7 @@ class GPTFF(nn.Module):
             radial_cutoff=radial_cutoff,
             angle_cutoff=angle_cutoff,
             cutoff_coeff=cutoff_coeff,
+            include_atom_message_modulation=not config.atom_attention.enabled,
         )
         self.readout_atom_norm = (
             nn.LayerNorm(atom_feature_dim) if config.readout_atom_norm else nn.Identity()

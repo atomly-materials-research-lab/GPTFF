@@ -402,10 +402,9 @@ class AttentionAtomUpdate(nn.Module):
             dropout=dropout,
             activate_output=True,
         )
-        self.output_gate = GatedMLP(
-            3 * atom_feature_dim,
+        self.output_gate = nn.Linear(
             atom_feature_dim,
-            dropout=dropout,
+            atom_feature_dim,
             bias=False,
         )
 
@@ -413,7 +412,6 @@ class AttentionAtomUpdate(nn.Module):
         self,
         atom_features,
         edge_features,
-        edge_modulation,
         graph,
         edge_basis,
         edge_cutoff,
@@ -440,7 +438,7 @@ class AttentionAtomUpdate(nn.Module):
             dim_size=atom_features.shape[0],
             edge_cutoff=edge_cutoff,
         )
-        values = self.value(pair_features) * edge_modulation
+        values = self.value(pair_features)
         values = values.reshape(-1, self.num_heads, self.head_dim)
         messages = values * attention.unsqueeze(-1)
         attention_aggregate = sum_aggregation(
@@ -457,14 +455,11 @@ class AttentionAtomUpdate(nn.Module):
         )
         smooth_degree = density_features[:, :1]
         attention_aggregate = attention_aggregate * smooth_degree
-        center_context = atom_features * torch.tanh(smooth_degree)
         density_context = self.density_context(density_features)
         scaled_attention = attention_aggregate * self.density_context.compute_scale(
             density_context
         )
-        return self.output_gate(
-            torch.cat([center_context, scaled_attention, density_context], dim=-1)
-        )
+        return self.output_gate(scaled_attention)
 
 
 class AtomFeedForward(nn.Module):
@@ -621,16 +616,18 @@ class InteractionBlock(nn.Module):
             atom_delta = self.atom_update(
                 normalized_atom_features,
                 edge_features,
-                geometry_features.edge_modulation.atom_message,
                 graph,
                 geometry_features.edge_basis,
                 geometry_features.edge_cutoff,
             )
         else:
+            atom_message_modulation = geometry_features.edge_modulation.atom_message
+            if atom_message_modulation is None:
+                raise ValueError("atom sum update requires atom_message edge modulation.")
             atom_delta = self.atom_update(
                 normalized_atom_features,
                 edge_features,
-                geometry_features.edge_modulation.atom_message,
+                atom_message_modulation,
                 graph,
             )
         atom_features = atom_features + self.residual_dropout(atom_delta)

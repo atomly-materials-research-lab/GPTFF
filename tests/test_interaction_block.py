@@ -64,6 +64,61 @@ def test_gptff_config_rejects_attention_heads_that_do_not_divide_atom_features()
         )
 
 
+def test_attention_atom_update_uses_bias_free_linear_output_projection():
+    attention = AttentionAtomUpdate(
+        atom_feature_dim=8,
+        edge_feature_dim=8,
+        num_radial=8,
+        num_heads=2,
+    )
+
+    assert isinstance(attention.output_gate, nn.Linear)
+    assert attention.output_gate.in_features == 8
+    assert attention.output_gate.out_features == 8
+    assert attention.output_gate.bias is None
+
+
+def test_attention_model_omits_unused_atom_message_modulation():
+    cfg = GPTFFConfig(
+        atom_feature_dim=8,
+        edge_feature_dim=8,
+        num_interaction_blocks=1,
+        num_radial=8,
+        num_angular=4,
+        radial_cutoff=3.0,
+        angle_cutoff=3.0,
+        cutoff_coeff=5,
+        atom_attention={"enabled": True, "num_heads": 2},
+    )
+    model = GPTFF(cfg)
+    graph = _batch()
+
+    assert model.geometry_embedding.edge_modulation.atom_message_weight is None
+
+    features = _features(model, graph)
+
+    assert features.edge_modulation.atom_message is None
+    assert features.edge_modulation.edge_message.shape == (
+        graph.edge_index.shape[1],
+        model.edge_feature_dim,
+    )
+
+
+def test_sum_update_model_keeps_atom_message_modulation():
+    model = GPTFF(_cfg())
+    graph = _batch()
+
+    assert isinstance(model.geometry_embedding.edge_modulation.atom_message_weight, nn.Linear)
+
+    features = _features(model, graph)
+
+    assert features.edge_modulation.atom_message is not None
+    assert features.edge_modulation.atom_message.shape == (
+        graph.edge_index.shape[1],
+        model.atom_feature_dim,
+    )
+
+
 def _batch(angle_cutoff=3.0):
     structure = Structure(
         Lattice.cubic(3.0),
@@ -223,7 +278,6 @@ def test_attention_atom_update_returns_zero_with_zero_cutoff_inputs():
     delta = attention(
         atom_fea,
         features.edge_features,
-        torch.zeros_like(features.edge_modulation.atom_message),
         graph,
         torch.zeros_like(features.edge_basis),
         torch.zeros_like(features.edge_cutoff),
@@ -232,7 +286,7 @@ def test_attention_atom_update_returns_zero_with_zero_cutoff_inputs():
     assert torch.equal(delta, torch.zeros_like(atom_fea))
 
 
-def test_attention_atom_update_output_gate_uses_smooth_gated_center_atom_features():
+def test_attention_atom_update_output_gate_uses_density_scaled_attention_aggregate():
     graph = _batch()
     model = GPTFF(_cfg())
     features = _features(model, graph)
@@ -243,6 +297,12 @@ def test_attention_atom_update_output_gate_uses_smooth_gated_center_atom_feature
         num_radial=model.num_radial,
         num_heads=2,
     )
+    attention.score = _ConstantFeature(output_dim=attention.num_heads, value=0.0)
+    attention.value = _ConstantFeature(output_dim=model.atom_feature_dim, value=1.0)
+    attention.density_context = _ConstantDensityScale(
+        output_dim=model.atom_feature_dim,
+        scale=2.0,
+    )
     attention.output_gate = _RecordingConstantFeature(
         output_dim=model.atom_feature_dim,
         value=0.0,
@@ -251,18 +311,17 @@ def test_attention_atom_update_output_gate_uses_smooth_gated_center_atom_feature
     attention(
         atom_fea,
         features.edge_features,
-        features.edge_modulation.atom_message,
         graph,
         features.edge_basis,
         features.edge_cutoff,
     )
 
     seen_input = attention.output_gate.seen_input
-    expected_degree = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
-    expected_degree.index_add_(0, graph.edge_index[0], features.edge_cutoff)
-    expected_center_context = atom_fea * torch.tanh(expected_degree)
-    assert seen_input.shape == (atom_fea.shape[0], 3 * model.atom_feature_dim)
-    assert torch.allclose(seen_input[:, : model.atom_feature_dim], expected_center_context)
+    expected_cutoff_sum = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
+    expected_cutoff_sum.index_add_(0, graph.edge_index[0], features.edge_cutoff)
+    expected_attention_sum = 2.0 * expected_cutoff_sum.expand(-1, model.atom_feature_dim)
+    assert seen_input.shape == (atom_fea.shape[0], model.atom_feature_dim)
+    assert torch.allclose(seen_input, expected_attention_sum)
 
 
 def test_attention_atom_update_rescales_uniform_attention_to_cutoff_sum():
@@ -288,19 +347,16 @@ def test_attention_atom_update_rescales_uniform_attention_to_cutoff_sum():
     attention(
         atom_fea,
         features.edge_features,
-        torch.ones_like(features.edge_modulation.atom_message),
         graph,
         features.edge_basis,
         features.edge_cutoff,
     )
 
     seen_input = attention.output_gate.seen_input
-    expected_degree = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
-    expected_degree.index_add_(0, graph.edge_index[0], features.edge_cutoff)
-    expected_attention_sum = expected_degree.expand(-1, model.atom_feature_dim)
-    start = model.atom_feature_dim
-    end = 2 * model.atom_feature_dim
-    assert torch.allclose(seen_input[:, start:end], expected_attention_sum)
+    expected_cutoff_sum = torch.zeros((atom_fea.shape[0], 1), dtype=atom_fea.dtype)
+    expected_cutoff_sum.index_add_(0, graph.edge_index[0], features.edge_cutoff)
+    expected_attention_sum = expected_cutoff_sum.expand(-1, model.atom_feature_dim)
+    assert torch.allclose(seen_input, expected_attention_sum)
 
 
 def test_attention_atom_update_no_edge_graph_skips_self_update():
@@ -329,7 +385,6 @@ def test_attention_atom_update_no_edge_graph_skips_self_update():
     delta = attention(
         atom_fea,
         features.edge_features,
-        features.edge_modulation.atom_message,
         batch,
         features.edge_basis,
         features.edge_cutoff,
@@ -375,7 +430,7 @@ def test_interaction_block_can_enable_atom_attention():
     assert torch.isfinite(edge_out).all()
 
 
-def test_interaction_block_enables_radial_density_with_atom_attention():
+def test_interaction_block_enables_density_context_with_atom_attention():
     cfg = _cfg(
         atom_attention={
             "enabled": True,
@@ -796,3 +851,16 @@ class _RecordingConstantFeature(_ConstantFeature):
     def forward(self, x):
         self.seen_input = x.detach().clone()
         return super().forward(x)
+
+
+class _ConstantDensityScale(nn.Module):
+    def __init__(self, output_dim, scale):
+        super().__init__()
+        self.output_dim = int(output_dim)
+        self.scale = float(scale)
+
+    def forward(self, density_features):
+        return density_features.new_zeros((density_features.shape[0], self.output_dim))
+
+    def compute_scale(self, density_context):
+        return density_context.new_full(density_context.shape, self.scale)

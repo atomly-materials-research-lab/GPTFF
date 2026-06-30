@@ -321,8 +321,9 @@ def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
         id(named_params["geometry_embedding.edge_embedding.edge_embedding.0.weight"])
         in no_decay_param_ids
     )
+    assert "geometry_embedding.edge_modulation.atom_message_weight.weight" not in named_params
     assert (
-        id(named_params["geometry_embedding.edge_modulation.atom_message_weight.weight"])
+        id(named_params["geometry_embedding.edge_modulation.edge_message_weight.weight"])
         in no_decay_param_ids
     )
     assert id(named_params["readout.output_layer.weight"]) in no_decay_param_ids

@@ -29,7 +29,7 @@ class AtomEmbedding(nn.Module):
 
 @dataclass(frozen=True)
 class EdgeModulation:
-    atom_message: torch.Tensor
+    atom_message: torch.Tensor | None
     edge_message: torch.Tensor
 
 
@@ -44,14 +44,29 @@ class GeometryFeatures:
 
 
 class EdgeModulationProjection(nn.Module):
-    def __init__(self, atom_feature_dim, edge_feature_dim, num_radial):
+    def __init__(
+        self,
+        atom_feature_dim,
+        edge_feature_dim,
+        num_radial,
+        *,
+        include_atom_message=True,
+    ):
         super().__init__()
-        self.atom_message_weight = nn.Linear(num_radial, atom_feature_dim, bias=False)
+        self.atom_message_weight = (
+            nn.Linear(num_radial, atom_feature_dim, bias=False)
+            if include_atom_message
+            else None
+        )
         self.edge_message_weight = nn.Linear(num_radial, edge_feature_dim, bias=False)
 
     def forward(self, edge_basis):
         return EdgeModulation(
-            atom_message=self.atom_message_weight(edge_basis),
+            atom_message=(
+                self.atom_message_weight(edge_basis)
+                if self.atom_message_weight is not None
+                else None
+            ),
             edge_message=self.edge_message_weight(edge_basis),
         )
 
@@ -87,13 +102,18 @@ class GeometryEmbedding(nn.Module):
         radial_cutoff,
         angle_cutoff,
         cutoff_coeff,
+        *,
+        include_atom_message_modulation=True,
     ):
         super().__init__()
         self.edge_rbf = RadialBesselBasis(num_radial, radial_cutoff, cutoff_coeff)
         self.angle_edge_rbf = RadialBesselBasis(num_radial, angle_cutoff, cutoff_coeff)
         self.edge_embedding = EdgeEmbedding(edge_feature_dim, num_radial)
         self.edge_modulation = EdgeModulationProjection(
-            atom_feature_dim, edge_feature_dim, num_radial
+            atom_feature_dim,
+            edge_feature_dim,
+            num_radial,
+            include_atom_message=include_atom_message_modulation,
         )
         self.triplet_modulation = TripletModulationProjection(edge_feature_dim, num_radial)
 
