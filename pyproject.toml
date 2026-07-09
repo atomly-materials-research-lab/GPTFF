@@ -1,17 +1,20 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "GPTFF"
+name = "gptff"
 version = "0.1.0"
 description = "Graph-based Pretrained Transformer Force Field."
+readme = "README.md"
 authors = [
     { name = "Fankai Xie", email = "fankaixiee@gmail.com" },
     { name = "Tenglong Lu", email = "lutenglongg@gmail.com" },
 ]
 maintainers = [{ name = "Tenglong Lu", email = "lutenglongg@gmail.com" }]
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 
 dependencies = [
     "pymatgen>=2026.5.4",
