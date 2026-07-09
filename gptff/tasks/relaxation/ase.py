@@ -31,51 +31,147 @@ if TYPE_CHECKING:
 GPA_TO_EV_PER_ANG3 = 1.0 / EV_PER_ANG3_TO_GPA
 
 
-def relax_with_ase(
+class ASERelaxationRunner:
+    """Configure and run an ASE-backed relaxation workflow.
+
+    This class is a workflow runner, not an implementation of the ASE Calculator
+    protocol. If an external ``ase_calculator`` is supplied, the same instance is
+    reused across ``run()`` calls and should be treated as non-concurrent state.
+    """
+
+    def __init__(
+        self,
+        *,
+        potential: GPTFFPotential | None = None,
+        ase_calculator: Calculator | None = None,
+        model_name: str | None = None,
+        model_path: str | Path | None = None,
+        device: str | None = None,
+        optimizer: str | type[Optimizer] = "FIRE",
+        fmax: float = 0.05,
+        max_steps: int = 500,
+        relax_atoms: bool = True,
+        relax_cell: bool = True,
+        fix_symmetry: bool = False,
+        symprec: float = 1e-2,
+        external_pressure_gpa: float = 0.0,
+        cell_filter: type[Filter] = FrechetCellFilter,
+        cell_filter_kwargs: Mapping[str, Any] | None = None,
+        logfile: str | None = None,
+        trajectory: str | None = None,
+    ) -> None:
+        if not relax_atoms and relax_cell:
+            raise ValueError("Cell-only ASE relaxation is not supported.")
+        if model_name is not None and model_path is not None:
+            raise ValueError("Pass either model_name or model_path, not both.")
+        if ase_calculator is not None and (
+            potential is not None
+            or model_name is not None
+            or model_path is not None
+            or device is not None
+        ):
+            raise ValueError(
+                "Pass either ase_calculator or GPTFF model selection arguments, not both."
+            )
+        if potential is not None and (
+            model_name is not None or model_path is not None or device is not None
+        ):
+            raise ValueError("Pass either a potential or model selection arguments, not both.")
+        if fmax <= 0:
+            raise ValueError("fmax must be positive.")
+        if max_steps < 0:
+            raise ValueError("max_steps must be non-negative.")
+        if symprec <= 0:
+            raise ValueError("symprec must be positive.")
+        optimizer_cls = _get_ase_optimizer(optimizer)
+
+        pressure = normalize_external_pressure_gpa(external_pressure_gpa)
+        if pressure != 0.0 and not relax_cell:
+            raise ValueError("external_pressure_gpa requires relax_cell=True.")
+
+        kwargs = dict(cell_filter_kwargs or {})
+        if "scalar_pressure" in kwargs:
+            raise ValueError(
+                "Use external_pressure_gpa instead of cell_filter_kwargs['scalar_pressure']."
+            )
+        if pressure != 0.0:
+            kwargs["scalar_pressure"] = pressure * GPA_TO_EV_PER_ANG3
+
+        self.potential = potential
+        self.ase_calculator = ase_calculator
+        self.model_name = model_name
+        self.model_path = model_path
+        self.device = device
+        self.optimizer = optimizer_cls
+        self.fmax = float(fmax)
+        self.max_steps = int(max_steps)
+        self.relax_atoms = bool(relax_atoms)
+        self.relax_cell = bool(relax_cell)
+        self.fix_symmetry = bool(fix_symmetry)
+        self.symprec = float(symprec)
+        self.external_pressure_gpa = pressure
+        self.cell_filter = cell_filter
+        self.cell_filter_kwargs = kwargs
+        self.logfile = logfile
+        self.trajectory = trajectory
+        self._cached_ase_calculator: Calculator | None = None
+
+    def run(
+        self,
+        structure: Structure | Atoms,
+        *,
+        logfile: str | None = None,
+        trajectory: str | None = None,
+    ) -> RelaxationResult:
+        """Run relaxation for one structure and return a structured result."""
+
+        return _run_ase_relaxation(
+            structure,
+            calculator=self._get_ase_calculator(),
+            optimizer=self.optimizer,
+            fmax=self.fmax,
+            max_steps=self.max_steps,
+            relax_atoms=self.relax_atoms,
+            relax_cell=self.relax_cell,
+            fix_symmetry=self.fix_symmetry,
+            symprec=self.symprec,
+            external_pressure_gpa=self.external_pressure_gpa,
+            cell_filter=self.cell_filter,
+            cell_filter_kwargs=dict(self.cell_filter_kwargs),
+            logfile=self.logfile if logfile is None else logfile,
+            trajectory=self.trajectory if trajectory is None else trajectory,
+        )
+
+    def _get_ase_calculator(self) -> Calculator:
+        if self.ase_calculator is not None:
+            return self.ase_calculator
+        if self._cached_ase_calculator is None:
+            self._cached_ase_calculator = ASECalculator(
+                potential=self.potential,
+                model_name=self.model_name,
+                model_path=self.model_path,
+                device=self.device,
+            )
+        return self._cached_ase_calculator
+
+
+def _run_ase_relaxation(
     structure: Structure | Atoms,
     *,
-    potential: GPTFFPotential | None = None,
-    ase_calculator: Calculator | None = None,
-    model_name: str | None = None,
-    model_path: str | Path | None = None,
-    device: str | None = None,
-    optimizer: str | type[Optimizer] = "FIRE",
-    fmax: float = 0.05,
-    max_steps: int = 500,
-    relax_atoms: bool = True,
-    relax_cell: bool = True,
-    fix_symmetry: bool = False,
-    symprec: float = 1e-2,
-    external_pressure_gpa: float = 0.0,
-    cell_filter: type[Filter] = FrechetCellFilter,
-    cell_filter_kwargs: Mapping[str, Any] | None = None,
-    logfile: str | None = None,
-    trajectory: str | None = None,
+    calculator: Calculator,
+    optimizer: type[Optimizer],
+    fmax: float,
+    max_steps: int,
+    relax_atoms: bool,
+    relax_cell: bool,
+    fix_symmetry: bool,
+    symprec: float,
+    external_pressure_gpa: float,
+    cell_filter: type[Filter],
+    cell_filter_kwargs: Mapping[str, Any],
+    logfile: str | None,
+    trajectory: str | None,
 ) -> RelaxationResult:
-    """Relax a pymatgen Structure or ASE Atoms object with the ASE engine."""
-
-    if not relax_atoms and relax_cell:
-        raise ValueError("Cell-only ASE relaxation is not supported.")
-
-    pressure = normalize_external_pressure_gpa(external_pressure_gpa)
-    if pressure != 0.0 and not relax_cell:
-        raise ValueError("external_pressure_gpa requires relax_cell=True.")
-
-    kwargs = dict(cell_filter_kwargs or {})
-    if "scalar_pressure" in kwargs:
-        raise ValueError(
-            "Use external_pressure_gpa instead of cell_filter_kwargs['scalar_pressure']."
-        )
-    if pressure != 0.0:
-        kwargs["scalar_pressure"] = pressure * GPA_TO_EV_PER_ANG3
-
-    calculator = _resolve_ase_calculator(
-        potential=potential,
-        ase_calculator=ase_calculator,
-        model_name=model_name,
-        model_path=model_path,
-        device=device,
-    )
     _validate_calculator_properties(calculator, require_stress=relax_cell)
 
     atoms = _to_ase_atoms(structure)
@@ -92,11 +188,10 @@ def relax_with_ase(
     optimizer_max_force: float | None = None
     optimizer_force_source = "atoms.get_forces"
     if relaxation_requested:
-        opt_target = cell_filter(atoms, **kwargs) if relax_cell else atoms
+        opt_target = cell_filter(atoms, **cell_filter_kwargs) if relax_cell else atoms
         if relax_cell:
             optimizer_force_source = f"{cell_filter.__name__}.get_forces"
-        optimizer_cls = _get_ase_optimizer(optimizer)
-        ase_optimizer = optimizer_cls(
+        ase_optimizer = optimizer(
             opt_target,
             logfile=logfile,
             trajectory=trajectory,
@@ -138,7 +233,7 @@ def relax_with_ase(
         relax_cell=relax_cell,
         fix_symmetry=fix_symmetry,
         symprec=symprec,
-        external_pressure_gpa=pressure,
+        external_pressure_gpa=external_pressure_gpa,
         relaxation_requested=relaxation_requested,
         was_relaxed=n_steps > 0,
         cell_filter=cell_filter,
@@ -164,31 +259,6 @@ def relax_with_ase(
         model_path=metadata.get("model_path"),
         metadata=metadata,
         warnings=warnings,
-    )
-
-
-def _resolve_ase_calculator(
-    *,
-    potential: GPTFFPotential | None,
-    ase_calculator: Calculator | None,
-    model_name: str | None,
-    model_path: str | Path | None,
-    device: str | None,
-) -> Calculator:
-    if ase_calculator is not None and (
-        potential is not None
-        or model_name is not None
-        or model_path is not None
-        or device is not None
-    ):
-        raise ValueError("Pass either ase_calculator or GPTFF model selection arguments, not both.")
-    if ase_calculator is not None:
-        return ase_calculator
-    return ASECalculator(
-        potential=potential,
-        model_name=model_name,
-        model_path=model_path,
-        device=device,
     )
 
 

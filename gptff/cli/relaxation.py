@@ -106,11 +106,10 @@ def register_relaxation_command(commands: argparse._SubParsersAction) -> None:
 def _relaxation(args: argparse.Namespace) -> None:
     from pymatgen.core import Structure
 
-    from gptff.tasks.relaxation import relax_with_ase
+    from gptff.tasks.relaxation import ASERelaxationRunner
 
     structure = Structure.from_file(args.input)
-    result = relax_with_ase(
-        structure,
+    runner = ASERelaxationRunner(
         model_name=args.model_name,
         model_path=args.model_path,
         device=args.device,
@@ -125,6 +124,7 @@ def _relaxation(args: argparse.Namespace) -> None:
         logfile=None if args.logfile is None else str(args.logfile),
         trajectory=None if args.trajectory is None else str(args.trajectory),
     )
+    result = runner.run(structure)
     result.final_structure.to(filename=args.output)
     _print_relaxation_summary(result, output=args.output)
 

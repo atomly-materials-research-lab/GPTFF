@@ -1,7 +1,7 @@
-from gptff.tasks.relaxation.ase import relax_with_ase
+from gptff.tasks.relaxation.ase import ASERelaxationRunner
 from gptff.tasks.relaxation.result import RelaxationResult
 
 __all__ = [
+    "ASERelaxationRunner",
     "RelaxationResult",
-    "relax_with_ase",
 ]

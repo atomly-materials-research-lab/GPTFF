@@ -5,16 +5,17 @@ from ase.calculators.calculator import Calculator, all_changes
 from ase.filters import FrechetCellFilter
 from pymatgen.core import Lattice, Structure
 
-from gptff.tasks import relax_with_ase as top_level_relax_with_ase
-from gptff.tasks.relaxation import relax_with_ase
+import gptff.tasks.relaxation.ase as ase_relaxation_module
+from gptff.tasks import ASERelaxationRunner as top_level_ASERelaxationRunner
+from gptff.tasks.relaxation import ASERelaxationRunner
 from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
-def test_relax_with_ase_is_reexported_from_tasks():
-    assert top_level_relax_with_ase is relax_with_ase
+def test_ase_relaxation_runner_is_reexported_from_tasks():
+    assert top_level_ASERelaxationRunner is ASERelaxationRunner
 
 
-def test_relax_with_ase_static_returns_metrics_and_pmg_structure():
+def test_ase_relaxation_runner_static_returns_metrics_and_pmg_structure():
     structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
     stress_gpa = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     calculator = _ConstantCalculator(
@@ -23,12 +24,12 @@ def test_relax_with_ase_static_returns_metrics_and_pmg_structure():
         stress=stress_gpa / EV_PER_ANG3_TO_GPA,
     )
 
-    result = relax_with_ase(
-        structure,
+    runner = ASERelaxationRunner(
         ase_calculator=calculator,
         relax_atoms=False,
         relax_cell=False,
     )
+    result = runner.run(structure)
 
     assert isinstance(result.final_structure, Structure)
     assert isinstance(result.initial_structure, Structure)
@@ -52,7 +53,7 @@ def test_relax_with_ase_static_returns_metrics_and_pmg_structure():
     )
 
 
-def test_relax_with_ase_accepts_ase_atoms():
+def test_ase_relaxation_runner_accepts_ase_atoms():
     atoms = Atoms(
         "Na",
         positions=[[0.0, 0.0, 0.0]],
@@ -60,18 +61,18 @@ def test_relax_with_ase_accepts_ase_atoms():
         pbc=True,
     )
 
-    result = relax_with_ase(
-        atoms,
+    runner = ASERelaxationRunner(
         ase_calculator=_ConstantCalculator(),
         relax_atoms=False,
         relax_cell=False,
     )
+    result = runner.run(atoms)
 
     assert isinstance(result.final_structure, Structure)
     assert result.final_structure.formula == "Na1"
 
 
-def test_relax_with_ase_runs_atom_optimizer():
+def test_ase_relaxation_runner_runs_atom_optimizer():
     atoms = Atoms(
         "Na",
         positions=[[0.2, 0.0, 0.0]],
@@ -79,8 +80,7 @@ def test_relax_with_ase_runs_atom_optimizer():
         pbc=True,
     )
 
-    result = relax_with_ase(
-        atoms,
+    runner = ASERelaxationRunner(
         ase_calculator=_HarmonicCalculator(),
         optimizer="FIRE",
         fmax=0.02,
@@ -88,6 +88,7 @@ def test_relax_with_ase_runs_atom_optimizer():
         relax_atoms=True,
         relax_cell=False,
     )
+    result = runner.run(atoms)
 
     assert result.is_converged is True
     assert result.was_relaxed is True
@@ -99,11 +100,10 @@ def test_relax_with_ase_runs_atom_optimizer():
     assert result.metadata["optimizer_force_includes_cell"] is False
 
 
-def test_relax_with_ase_cell_filter_tracks_generalized_force_and_pressure():
+def test_ase_relaxation_runner_cell_filter_tracks_generalized_force_and_pressure():
     _RecordingCellFilter.last_kwargs = None
 
-    result = relax_with_ase(
-        _structure(),
+    runner = ASERelaxationRunner(
         ase_calculator=_ConstantCalculator(
             forces=np.zeros((1, 3)),
             stress=np.zeros(6),
@@ -114,6 +114,7 @@ def test_relax_with_ase_cell_filter_tracks_generalized_force_and_pressure():
         external_pressure_gpa=2.0,
         cell_filter=_RecordingCellFilter,
     )
+    result = runner.run(_structure())
 
     assert _RecordingCellFilter.last_kwargs is not None
     assert _RecordingCellFilter.last_kwargs["scalar_pressure"] == pytest.approx(
@@ -129,20 +130,55 @@ def test_relax_with_ase_cell_filter_tracks_generalized_force_and_pressure():
     assert "atomic_max_force" in result.warnings[0]
 
 
-def test_relax_with_ase_rejects_cell_only_relaxation():
+def test_ase_relaxation_runner_lazily_creates_and_reuses_default_calculator(monkeypatch):
+    created = []
+
+    class _FakeGPTFFASECalculator(_ConstantCalculator):
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+            super().__init__(forces=np.zeros((1, 3)), stress=np.zeros(6))
+            self.potential = None
+
+    monkeypatch.setattr(ase_relaxation_module, "ASECalculator", _FakeGPTFFASECalculator)
+
+    runner = ASERelaxationRunner(
+        relax_atoms=False,
+        relax_cell=False,
+        device="cpu",
+    )
+
+    assert created == []
+    runner.run(_structure())
+    runner.run(_structure())
+
+    assert len(created) == 1
+    assert created[0]["device"] == "cpu"
+
+
+def test_ase_relaxation_runner_rejects_unknown_optimizer_before_default_calculator(
+    monkeypatch,
+):
+    def fail_if_loaded(**kwargs):
+        raise AssertionError("ASECalculator should not be created for an invalid optimizer.")
+
+    monkeypatch.setattr(ase_relaxation_module, "ASECalculator", fail_if_loaded)
+
+    with pytest.raises(ValueError, match="Unknown ASE optimizer"):
+        ASERelaxationRunner(optimizer="NoSuchOptimizer")
+
+
+def test_ase_relaxation_runner_rejects_cell_only_relaxation():
     with pytest.raises(ValueError, match="Cell-only ASE relaxation"):
-        relax_with_ase(
-            _structure(),
+        ASERelaxationRunner(
             ase_calculator=_ConstantCalculator(),
             relax_atoms=False,
             relax_cell=True,
         )
 
 
-def test_relax_with_ase_rejects_pressure_without_cell_relaxation():
+def test_ase_relaxation_runner_rejects_pressure_without_cell_relaxation():
     with pytest.raises(ValueError, match="external_pressure_gpa requires relax_cell"):
-        relax_with_ase(
-            _structure(),
+        ASERelaxationRunner(
             ase_calculator=_ConstantCalculator(),
             relax_atoms=True,
             relax_cell=False,
@@ -150,22 +186,58 @@ def test_relax_with_ase_rejects_pressure_without_cell_relaxation():
         )
 
 
-def test_relax_with_ase_requires_stress_for_cell_relaxation():
+def test_ase_relaxation_runner_requires_stress_for_cell_relaxation():
+    runner = ASERelaxationRunner(
+        ase_calculator=_NoStressCalculator(),
+        relax_atoms=True,
+        relax_cell=True,
+    )
+
     with pytest.raises(ValueError, match="stress"):
-        relax_with_ase(
-            _structure(),
-            ase_calculator=_NoStressCalculator(),
-            relax_atoms=True,
-            relax_cell=True,
+        runner.run(_structure())
+
+
+def test_ase_relaxation_runner_rejects_mixed_calculator_and_model_args():
+    with pytest.raises(ValueError, match="ase_calculator or GPTFF model selection"):
+        ASERelaxationRunner(
+            ase_calculator=_ConstantCalculator(),
+            model_path="custom.pt",
         )
 
 
-def test_relax_with_ase_rejects_mixed_calculator_and_model_args():
-    with pytest.raises(ValueError, match="ase_calculator or GPTFF model selection"):
-        relax_with_ase(
-            _structure(),
-            ase_calculator=_ConstantCalculator(),
+def test_ase_relaxation_runner_rejects_mixed_potential_and_model_args():
+    with pytest.raises(ValueError, match="potential or model selection"):
+        ASERelaxationRunner(
+            potential=object(),
+            device="cpu",
+        )
+
+
+def test_ase_relaxation_runner_rejects_mixed_model_name_and_model_path():
+    with pytest.raises(ValueError, match="model_name or model_path"):
+        ASERelaxationRunner(
+            model_name="default",
             model_path="custom.pt",
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"fmax": 0.0}, "fmax"),
+        ({"max_steps": -1}, "max_steps"),
+        ({"symprec": 0.0}, "symprec"),
+    ],
+)
+def test_ase_relaxation_runner_validates_numeric_options(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        ASERelaxationRunner(**kwargs)
+
+
+def test_ase_relaxation_runner_rejects_scalar_pressure_cell_filter_kwarg():
+    with pytest.raises(ValueError, match="external_pressure_gpa"):
+        ASERelaxationRunner(
+            cell_filter_kwargs={"scalar_pressure": 1.0},
         )
 
 

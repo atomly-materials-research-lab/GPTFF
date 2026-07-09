@@ -40,22 +40,30 @@ def test_relaxation_command_calls_relaxation_and_writes_structure(
     structure.to(filename=input_path)
     calls = []
 
-    def fake_relax_with_ase(input_structure, **kwargs):
-        calls.append((input_structure, kwargs))
-        return RelaxationResult(
-            initial_structure=input_structure,
-            final_structure=input_structure,
-            energy=-1.25,
-            forces=[],
-            max_force=0.0,
-            is_converged=True,
-            relaxation_requested=True,
-            was_relaxed=True,
-            n_steps=3,
-            engine_name="ase",
-        )
+    class FakeASERelaxationRunner:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
 
-    monkeypatch.setattr(relaxation_task, "relax_with_ase", fake_relax_with_ase)
+        def run(self, input_structure):
+            calls.append(("run", input_structure))
+            return RelaxationResult(
+                initial_structure=input_structure,
+                final_structure=input_structure,
+                energy=-1.25,
+                forces=[],
+                max_force=0.0,
+                is_converged=True,
+                relaxation_requested=True,
+                was_relaxed=True,
+                n_steps=3,
+                engine_name="ase",
+            )
+
+    monkeypatch.setattr(
+        relaxation_task,
+        "ASERelaxationRunner",
+        FakeASERelaxationRunner,
+    )
 
     cli_main.main(
         [
@@ -75,8 +83,9 @@ def test_relaxation_command_calls_relaxation_and_writes_structure(
 
     assert output_path.exists()
     assert Structure.from_file(output_path).formula == "Na1"
-    assert len(calls) == 1
+    assert len(calls) == 2
     _, kwargs = calls[0]
+    assert calls[1][0] == "run"
     assert kwargs["fmax"] == pytest.approx(0.01)
     assert kwargs["max_steps"] == 7
     assert kwargs["relax_cell"] is False
