@@ -41,6 +41,32 @@ forces = atoms.get_forces() # unit (eV/Å)
 stress = atoms.get_stress() # unit (eV/Å^3), Voigt order: xx, yy, zz, yz, xz, xy
 ```
 
+**Direct Structure Relaxation (ASE):**
+
+```python
+from gptff.tasks.relaxation import relax_with_ase
+from pymatgen.core import Structure
+
+struc = Structure.from_file("POSCAR_structure")
+result = relax_with_ase(
+    struc,
+    fmax=0.01,
+    max_steps=100,
+    relax_cell=True,
+)
+
+relaxed_structure = result.final_structure
+energy = result.energy
+forces = result.forces
+stress = result.stress
+```
+
+The same workflow is available from the command line:
+
+```bash
+gptff relaxation POSCAR_structure --output relaxed.cif --fmax 0.01 --max-steps 100
+```
+
 **Structure Optimization:**
 
 Lattice vectors would be changed
@@ -183,7 +209,7 @@ gptff train config.yaml
 For multi-GPU training, launch with PyTorch DDP:
 
 ```bash
-torchrun --nproc_per_node=4 -m gptff.cli train config.yaml
+torchrun --nproc_per_node=4 -m gptff.cli.main train config.yaml
 ```
 
 When `training.distributed: auto`, GPTFF automatically enables DDP under
