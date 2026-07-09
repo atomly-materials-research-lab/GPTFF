@@ -18,16 +18,18 @@ pip install .
 
 ## Usage
 
+`ASECalculator()` loads the default `GPTFF-MatPES_PBE_2025.2.pt` checkpoint and
+automatically uses CUDA when available. Pass `device="cpu"` or
+`model_path="/path/to/checkpoint.pt"` to override those defaults.
+
 **Fast Energy(eV), Force(eV/Å), Stress(eV/Å^3, ASE Voigt) calculation:**
 
 ```python
-from gptff.model import ASECalculator
+from gptff.interfaces import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-model_weight = "pretrained/gptff_v1.pth"
-device = 'cuda' # or cpu
-p = ASECalculator(model_weight, device) # Initialize the model and load weights
+p = ASECalculator()
 
 adp = AseAtomsAdaptor()
 struc = Structure.from_file('POSCAR_structure')
@@ -44,15 +46,13 @@ stress = atoms.get_stress() # unit (eV/Å^3), Voigt order: xx, yy, zz, yz, xz, x
 Lattice vectors would be changed
 
 ```python
-from gptff.model import ASECalculator
+from gptff.interfaces import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
 from ase.filters import ExpCellFilter, StrainFilter
 
-model_weight = "pretrained/gptff_v1.pth"
-device = 'cuda' # or cpu
-p = ASECalculator(model_weight, device) # Initialize the model and load weights
+p = ASECalculator()
 
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
@@ -70,15 +70,13 @@ FIRE(optimizer).run(fmax=0.01, steps=100)
 Lattice vectors would not change; only atomic positions would be optimized.
 
 ```python
-from gptff.model import ASECalculator
+from gptff.interfaces import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
 from ase.optimize.bfgs import BFGS
 
-model_weight = "pretrained/gptff_v1.pth"
-device = 'cuda' # or cpu
-p = ASECalculator(model_weight, device) # Initialize the model and load weights
+p = ASECalculator()
 
 
 struc = Structure.from_file('POSCAR_structure') # Read structure
@@ -95,16 +93,14 @@ optimizer.run(fmax=0.01, steps=1000)
 We will support `LAMMPS` with `GPTFF` later.
 
 ```python
-from gptff.model import ASECalculator
+from gptff.interfaces import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase import Atoms, units
 from ase.md.nvtberendsen import NVTBerendsen
 import os
 
-model_weight = "pretrained/gptff_v1.pth"
-device = 'cuda' # or cpu
-p = ASECalculator(model_weight, device) # Initialize the model and load weights
+p = ASECalculator()
 
 
 struc = Structure.from_file('POSCAR_structure') # Read structure

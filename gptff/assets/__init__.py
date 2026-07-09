@@ -1,0 +1,1 @@
+"""Packaged GPTFF model assets."""

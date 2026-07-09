@@ -1,38 +1,44 @@
+from pathlib import Path
+
 import torch
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
-from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
-from gptff.inference import predict_energy_forces_stress
-from gptff.model.config import GPTFFConfig
-from gptff.model.model import GPTFF
+from gptff.runtime import GPTFFPotential
 from gptff.utils.labels import stress_gpa_to_ase_voigt
 
 
 class ASECalculator(Calculator):
     implemented_properties = ["energy", "free_energy", "forces", "stress"]
 
-    def __init__(self, model_path, device="cuda", **kwargs):
+    def __init__(
+        self,
+        potential: GPTFFPotential | None = None,
+        *,
+        model_name: str | None = None,
+        model_path: str | Path | None = None,
+        device: str | torch.device | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
-        self.state = torch.load(model_path, map_location=torch.device(device))
-
-        self.model_config = GPTFFConfig.from_dict(self.state["model_config"])
-        self.model = GPTFF(self.model_config)
-        self.device = device
-        self.model.load_state_dict(self.state["state_dict"])
-        self.model = self.model.to(device)
-        self.model.eval()
-        self.graph_converter = CrystalGraphConverter(
-            radial_cutoff=self.model_config.radial_cutoff,
-            angle_cutoff=self.model_config.angle_cutoff,
+        if potential is not None and (
+            model_name is not None or model_path is not None or device is not None
+        ):
+            raise ValueError("Pass either a potential or model selection arguments, not both.")
+        self.potential = potential or GPTFFPotential.from_pretrained(
+            model_name=model_name,
+            model_path=model_path,
+            device=device,
         )
+        self.device = self.potential.device
+        self.model_path = self.potential.model_path
+        self.model_config = self.potential.model_config
+        self.model = self.potential.model
 
     def predict_properties(self, batch):
-        return predict_energy_forces_stress(
-            self.model,
+        return self.potential.predict_batch(
             batch,
-            create_graph=False,
             compute_stress=True,
         )
 
@@ -47,8 +53,8 @@ class ASECalculator(Calculator):
         system_changes = system_changes or all_changes
         super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
 
-        graph = self.graph_converter.convert_ase_atoms(atoms)
-        batch = CrystalGraphBatch.from_graphs([graph]).to(self.device)
+        graph = self.potential.graph_converter.convert_ase_atoms(atoms)
+        batch = self.potential.batch_graphs([graph])
         energy, forces, stress = self.predict_properties(batch)
 
         self.results.update(

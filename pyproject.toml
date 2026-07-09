@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "GPTFF"
-version = "0.0.1"
+version = "0.1.0"
 description = "Graph-based Pretrained Transformer Force Field."
 authors = [
     { name = "Fankai Xie", email = "fankaixiee@gmail.com" },
@@ -22,10 +22,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = ["ruff>=0.15.20", "pytest>=9.1.1"]
 wandb = ["wandb>=0.27.2"]
 
 [tool.setuptools.packages]
 find = { include = ["gptff*"], exclude = ["test*"] }
+
+[tool.setuptools.package-data]
+"gptff.assets" = ["MatPES-PBE-2025.2/*.pt"]
 
 [project.scripts]
 gptff = "gptff.cli:main"
