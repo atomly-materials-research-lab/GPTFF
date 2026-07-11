@@ -22,5 +22,5 @@ learn/
 architecture.md
 
 *.sh
-main.py
+/main.py
 *.cpp
