@@ -132,6 +132,9 @@ advance the schedule. `warmup_epochs` and `lr_cycle_epochs` use epoch units, whi
 units. A non-restarting cosine schedule stays at its minimum learning rate after
 the configured decay interval.
 
+Set `training.grad_clip_norm` to `0` to disable gradient clipping, or to a
+positive finite value to clip the total gradient norm.
+
 For large datasets, GPTFF also supports precomputed sharded HDF5 graph datasets:
 
 ```yaml

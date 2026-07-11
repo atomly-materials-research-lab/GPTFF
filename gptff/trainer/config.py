@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -62,6 +63,8 @@ class TrainingLoopConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "distributed", _distributed_mode(self.distributed))
+        if not math.isfinite(self.grad_clip_norm) or self.grad_clip_norm < 0:
+            raise ValueError("grad_clip_norm must be finite and non-negative.")
 
 
 @dataclass(frozen=True)

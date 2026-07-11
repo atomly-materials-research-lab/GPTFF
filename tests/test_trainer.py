@@ -43,6 +43,7 @@ from gptff.trainer.trainer import (
     TrainingConfig,
     build_optimizer,
     build_scheduler,
+    clip_gradients,
     compute_batch_loss,
     effective_scheduler_steps_per_epoch,
     has_nonfinite_loss,
@@ -617,6 +618,25 @@ def test_cuda_amp_requires_explicit_amp_flag():
     config.amp = True
 
     assert use_cuda_amp(config) is True
+
+
+def test_zero_grad_clip_norm_disables_gradient_clipping():
+    model = torch.nn.Linear(1, 1, bias=False)
+    model.weight.grad = torch.full_like(model.weight, 3.0)
+
+    result = clip_gradients(model, max_norm=0.0)
+
+    assert result is None
+    assert torch.equal(model.weight.grad, torch.full_like(model.weight, 3.0))
+
+
+@pytest.mark.parametrize("grad_clip_norm", [-1.0, float("nan"), float("inf")])
+def test_training_config_rejects_invalid_grad_clip_norm(grad_clip_norm):
+    raw_config = _canonical_config()
+    raw_config["training"]["grad_clip_norm"] = grad_clip_norm
+
+    with pytest.raises(ValueError, match="grad_clip_norm must be finite and non-negative"):
+        TrainingConfig.from_dict(raw_config)
 
 
 def test_only_nonfinite_losses_are_skipped():

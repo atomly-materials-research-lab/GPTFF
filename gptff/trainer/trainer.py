@@ -228,6 +228,15 @@ def has_nonfinite_loss(batch_loss: BatchLoss) -> bool:
     return not bool(torch.isfinite(batch_loss.loss).item())
 
 
+def clip_gradients(model: torch.nn.Module, max_norm: float):
+    max_norm = float(max_norm)
+    if not math.isfinite(max_norm) or max_norm < 0:
+        raise ValueError("max_norm must be finite and non-negative.")
+    if max_norm == 0:
+        return None
+    return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+
 def should_skip_optimizer_step(
     batch_loss: BatchLoss,
     context: DistributedContext,
@@ -370,7 +379,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(batch_loss.loss).backward()
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip_norm)
+        clip_gradients(model, config.grad_clip_norm)
         scaler.step(optimizer)
         scaler.update()
         if scheduler is not None and batch_idx in scheduler_batches:
