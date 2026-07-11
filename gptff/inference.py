@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import torch
 
-from gptff.utils.labels import EV_PER_ANG3_TO_GPA
-
 
 def predict_energy_forces_stress(
     model,
@@ -12,6 +10,8 @@ def predict_energy_forces_stress(
     *,
     compute_stress=True,
 ):
+    """Return energy, forces, and stress in eV, eV/Angstrom, and eV/Angstrom^3."""
+
     graph = batch.with_geometry(
         positions_requires_grad=True,
         strain_requires_grad=compute_stress,
@@ -41,7 +41,7 @@ def predict_energy_forces_stress(
     if compute_stress:
         stress_grad = _optional_gradient(next(grad_iter), graph.strain, zero_energy)
         volumes = graph.volumes if create_graph else graph.volumes.detach()
-        stress = stress_grad / volumes[:, None, None] * EV_PER_ANG3_TO_GPA
+        stress = stress_grad / volumes[:, None, None]
     else:
         stress = None
     return energy, forces, stress

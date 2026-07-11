@@ -7,6 +7,7 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
+import gptff.trainer.loss as loss_module
 import gptff.trainer.trainer as trainer_module
 from gptff.data import (
     AtomicDataset,
@@ -53,6 +54,7 @@ from gptff.trainer.trainer import (
     sync_epoch_metrics,
     use_cuda_amp,
 )
+from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_trainer_config_parses_sections_without_side_effects():
@@ -1207,6 +1209,32 @@ def test_compute_batch_loss_requires_stress_labels_when_enabled():
         )
 
 
+def test_compute_batch_loss_converts_native_stress_to_training_gpa(monkeypatch):
+    config = TrainingConfig.from_dict(_raw_config())
+    config.stress_loss_weight = 1.0
+    batch = _energy_force_stress_batch()
+
+    def fake_predict(*_args, **_kwargs):
+        return (
+            batch.energy.clone(),
+            batch.forces.clone(),
+            batch.stress.clone() / EV_PER_ANG3_TO_GPA,
+        )
+
+    monkeypatch.setattr(loss_module, "predict_energy_forces_stress", fake_predict)
+
+    batch_loss = compute_batch_loss(
+        _ConstantEnergyModel(),
+        batch,
+        torch.nn.HuberLoss(),
+        config,
+        create_graph=False,
+    )
+
+    assert batch_loss.loss.item() == pytest.approx(0.0)
+    assert batch_loss.stress_mae.item() == pytest.approx(0.0, abs=1e-6)
+
+
 class _ConstantEnergyModel(torch.nn.Module):
     def forward(self, graph):
         return torch.zeros(
@@ -1229,6 +1257,17 @@ def _energy_force_batch():
         [graph],
         energies=[-1.0],
         forces=[np.zeros((1, 3), dtype=np.float32)],
+    )
+
+
+def _energy_force_stress_batch():
+    structure = Structure(Lattice.cubic(3.0), ["Na"], [[0.0, 0.0, 0.0]])
+    graph = CrystalGraphConverter(radial_cutoff=2.0, angle_cutoff=2.0).convert(structure)
+    return CrystalGraphBatch.from_graphs(
+        [graph],
+        energies=[-1.0],
+        forces=[np.zeros((1, 3), dtype=np.float32)],
+        stresses=[np.eye(3, dtype=np.float32) * 2.0],
     )
 
 

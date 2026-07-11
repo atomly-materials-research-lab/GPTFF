@@ -60,25 +60,22 @@ def resolve_model_path(model_path: str | Path) -> Path:
     return path
 
 
-def load_checkpoint(
-    *,
-    model_name: str | None = None,
-    model_path: str | Path | None = None,
-    verify: bool = True,
-) -> dict[str, Any]:
-    """Load a GPTFF checkpoint from an explicit path or the packaged registry."""
-
+def _load_checkpoint_file(model_path: Path) -> dict[str, Any]:
     import torch
 
-    if model_name is not None and model_path is not None:
-        raise ValueError("Pass either model_name or model_path, not both.")
+    return torch.load(
+        model_path,
+        map_location=torch.device("cpu"),
+        weights_only=True,
+    )
 
-    if model_path is not None:
-        return torch.load(
-            resolve_model_path(model_path),
-            map_location=torch.device("cpu"),
-            weights_only=True,
-        )
+
+def _load_packaged_checkpoint(
+    model_name: str | None = None,
+    *,
+    verify: bool = True,
+) -> dict[str, Any]:
+    import torch
 
     spec = get_model_spec(model_name)
     with as_file(spec.resource) as path:

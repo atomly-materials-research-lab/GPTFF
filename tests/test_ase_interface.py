@@ -8,12 +8,10 @@ from gptff.model import GPTFF, GPTFFConfig
 from gptff.pretrained import (
     DEFAULT_MODEL_NAME,
     get_model_spec,
-    load_checkpoint,
     model_checksum,
     path_checksum,
 )
 from gptff.runtime import GPTFFPotential
-from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_ase_calculator_uses_packaged_default_model():
@@ -33,9 +31,9 @@ def test_packaged_default_model_matches_pretrained_directory_copy():
 
 
 def test_packaged_default_checkpoint_loads_on_cpu():
-    checkpoint = load_checkpoint()
+    potential = GPTFFPotential.from_pretrained(device="cpu")
 
-    assert all(tensor.device.type == "cpu" for tensor in checkpoint["state_dict"].values())
+    assert all(tensor.device.type == "cpu" for tensor in potential.model.state_dict().values())
 
 
 def test_default_potential_keeps_checkpoint_metadata_light():
@@ -99,7 +97,7 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
     assert stress.shape == (6,)
     assert np.allclose(
         stress,
-        np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) / EV_PER_ANG3_TO_GPA,
+        np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
     )
 
 

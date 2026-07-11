@@ -5,7 +5,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
 
 from gptff.runtime import GPTFFPotential
-from gptff.utils.labels import stress_gpa_to_ase_voigt
+from gptff.utils.labels import stress_matrix_to_ase_voigt
 
 
 class ASECalculator(Calculator):
@@ -61,5 +61,5 @@ class ASECalculator(Calculator):
             energy=float(energy.detach().cpu().item()),
             free_energy=float(energy.detach().cpu().item()),
             forces=forces.detach().cpu().numpy(),
-            stress=stress_gpa_to_ase_voigt(stress[0].detach().cpu().numpy()),
+            stress=stress_matrix_to_ase_voigt(stress[0].detach().cpu().numpy()),
         )

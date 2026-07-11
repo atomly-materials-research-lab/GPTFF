@@ -8,7 +8,6 @@ from pymatgen.core import Lattice, Structure
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.inference import predict_energy_forces_stress
 from gptff.model import GPTFF, GPTFFConfig
-from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 RADIAL_CUTOFF = 3.0
 ANGLE_CUTOFF = 2.5
@@ -250,7 +249,6 @@ def test_full_gptff_stress_matches_strain_finite_difference(component):
         (_energy(model, positive) - _energy(model, negative))
         / (2 * step)
         / volume
-        * EV_PER_ANG3_TO_GPA
     )
 
     assert stress[0, row, column].item() == pytest.approx(

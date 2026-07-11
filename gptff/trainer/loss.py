@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from gptff.inference import predict_energy_forces_stress
 from gptff.trainer.config import TrainingConfig
+from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 @dataclass
@@ -78,9 +79,14 @@ def compute_batch_loss(
     force_count = int(batch.forces.numel())
 
     if compute_stress:
-        stress_loss = criterion(stress_pred.reshape(-1), batch.stress.reshape(-1))
+        # Dataset stress labels and reported stress metrics use GPa.
+        stress_pred_gpa = stress_pred * EV_PER_ANG3_TO_GPA
+        stress_loss = criterion(stress_pred_gpa.reshape(-1), batch.stress.reshape(-1))
         loss = loss + config.stress_loss_weight * stress_loss
-        stress_mae = mae(stress_pred.detach().reshape(-1), batch.stress.detach().reshape(-1))
+        stress_mae = mae(
+            stress_pred_gpa.detach().reshape(-1),
+            batch.stress.detach().reshape(-1),
+        )
         stress_count = int(batch.stress.numel())
 
     return BatchLoss(

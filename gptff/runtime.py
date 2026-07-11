@@ -73,16 +73,22 @@ class GPTFFPotential:
         model_path: str | Path | None = None,
         device: str | torch.device | None = None,
     ) -> GPTFFPotential:
-        from gptff.pretrained import DEFAULT_MODEL_NAME, load_checkpoint, resolve_model_path
+        from gptff.pretrained import (
+            DEFAULT_MODEL_NAME,
+            _load_checkpoint_file,
+            _load_packaged_checkpoint,
+            resolve_model_path,
+        )
 
         if model_name is not None and model_path is not None:
             raise ValueError("Pass either model_name or model_path, not both.")
 
         resolved_device = resolve_device(device)
         resolved_path = None if model_path is None else resolve_model_path(model_path)
-        checkpoint = load_checkpoint(
-            model_name=model_name,
-            model_path=resolved_path,
+        checkpoint = (
+            _load_checkpoint_file(resolved_path)
+            if resolved_path is not None
+            else _load_packaged_checkpoint(model_name)
         )
         return cls.from_checkpoint(
             checkpoint,
@@ -94,9 +100,6 @@ class GPTFFPotential:
     def batch_graphs(self, graphs: Sequence) -> CrystalGraphBatch:
         return CrystalGraphBatch.from_graphs(graphs).to(self.device)
 
-    def batch_structure(self, structure) -> CrystalGraphBatch:
-        return self.batch_graphs([self.graph_converter.convert(structure)])
-
     def predict_batch(
         self,
         batch,
@@ -104,6 +107,8 @@ class GPTFFPotential:
         compute_stress: bool = True,
         create_graph: bool = False,
     ):
+        """Predict energy, forces, and stress in eV, eV/Angstrom, and eV/Angstrom^3."""
+
         return predict_energy_forces_stress(
             self.model,
             batch,

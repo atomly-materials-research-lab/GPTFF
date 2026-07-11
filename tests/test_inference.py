@@ -8,7 +8,6 @@ from pymatgen.core import Lattice, Structure
 from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.inference import predict_energy_forces_stress
 from gptff.model import GPTFF, GPTFFConfig
-from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 
 
 def test_prediction_returns_zero_unused_geometry_gradients():
@@ -174,9 +173,9 @@ def test_stress_matches_strain_finite_difference(left_handed):
     )
 
     assert stress[0, strain_i, strain_j].item() == pytest.approx(
-        finite_diff_stress * EV_PER_ANG3_TO_GPA,
+        finite_diff_stress,
         rel=5e-3,
-        abs=5e-2,
+        abs=5e-4,
     )
 
 
