@@ -1,9 +1,12 @@
+import importlib
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
 
-import gptff.cli.main as cli_main
+import gptff.cli as cli_main
 import gptff.tasks.relaxation as relaxation_task
 import gptff.trainer.config as trainer_config
 import gptff.trainer.trainer as trainer_module
@@ -92,12 +95,34 @@ def test_relaxation_command_calls_relaxation_and_writes_structure(
     assert kwargs["device"] == "cpu"
 
 
-def test_main_module_entrypoint_help_smoke(capsys) -> None:
+def test_cli_entrypoint_help_smoke(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         cli_main.main(["--help"])
 
     assert exc_info.value.code == 0
     assert "relaxation" in capsys.readouterr().out
+
+
+def test_cli_module_entrypoint_runs_package() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "gptff.cli", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "relaxation" in result.stdout
+
+
+def test_cli_main_export_is_stable_after_importing_implementation() -> None:
+    importlib.import_module("gptff.cli._app")
+
+    from gptff.cli import main
+
+    assert callable(main)
+    assert main is cli_main.main
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("gptff.cli.main")
 
 
 def test_relaxation_parser_rejects_model_name_with_model_path() -> None:

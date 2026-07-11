@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
-from importlib.metadata import PackageNotFoundError, version
+
+from gptff import __version__
 
 CommandHandler = Callable[[argparse.Namespace], None]
 
@@ -15,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {_package_version()}",
+        version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -31,14 +32,3 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     handler: CommandHandler = args.handler
     handler(args)
-
-
-def _package_version() -> str:
-    try:
-        return version("gptff")
-    except PackageNotFoundError:
-        return "0+unknown"
-
-
-if __name__ == "__main__":
-    main()

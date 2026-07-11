@@ -96,23 +96,6 @@ def load_checkpoint(
         )
 
 
-def load_model(
-    *,
-    model_name: str | None = None,
-    model_path: str | Path | None = None,
-    device=None,
-):
-    """Load a pretrained GPTFF potential."""
-
-    from gptff.runtime import GPTFFPotential
-
-    return GPTFFPotential.from_pretrained(
-        model_name=model_name,
-        model_path=model_path,
-        device=device,
-    )
-
-
 def model_checksum(model_name: str | None = None) -> str:
     spec = get_model_spec(model_name)
     with spec.resource.open("rb") as file:

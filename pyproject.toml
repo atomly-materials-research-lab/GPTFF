@@ -12,7 +12,7 @@ authors = [
     { name = "Tenglong Lu", email = "lutenglongg@gmail.com" },
 ]
 maintainers = [{ name = "Tenglong Lu", email = "lutenglongg@gmail.com" }]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 
@@ -35,14 +35,14 @@ find = { include = ["gptff*"], exclude = ["test*"] }
 "gptff.assets" = ["MatPES-PBE-2025.2/*.pt"]
 
 [project.scripts]
-gptff = "gptff.cli.main:main"
+gptff = "gptff.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/atomly-materials-research-lab/GPTFF"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["learn"]
 
 [tool.ruff.lint]

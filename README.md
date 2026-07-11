@@ -3,6 +3,8 @@ inorganic materials.
 
 ## Installation
 
+Python 3.12 or newer is required.
+
 Clone this repository and install:
 
 ```bash
@@ -95,7 +97,7 @@ gptff train config.yaml
 For multi-GPU training, launch with PyTorch DDP:
 
 ```bash
-torchrun --nproc_per_node=4 -m gptff.cli.main train config.yaml
+torchrun --nproc_per_node=4 -m gptff.cli train config.yaml
 ```
 
 ### Label conventions
