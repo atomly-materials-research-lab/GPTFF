@@ -37,7 +37,6 @@ class EdgeModulation:
 class GeometryFeatures:
     edge_basis: torch.Tensor
     edge_cutoff: torch.Tensor
-    angle_radial_basis: torch.Tensor
     edge_features: torch.Tensor
     edge_modulation: EdgeModulation
     triplet_modulation: torch.Tensor
@@ -124,7 +123,6 @@ class GeometryEmbedding(nn.Module):
         return GeometryFeatures(
             edge_basis=edge_basis,
             edge_cutoff=edge_cutoff,
-            angle_radial_basis=angle_radial_basis,
             edge_features=self.edge_embedding(edge_basis),
             edge_modulation=self.edge_modulation(edge_basis),
             triplet_modulation=self.triplet_modulation(angle_radial_basis),

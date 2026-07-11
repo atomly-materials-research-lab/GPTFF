@@ -470,7 +470,6 @@ def test_attention_atom_update_replaces_sum_update_and_ffn_scales_afterward():
     features = GeometryFeatures(
         edge_basis=torch.zeros((edge_ij.shape[0], model.num_radial)),
         edge_cutoff=torch.ones((edge_ij.shape[0], 1)),
-        angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_features=edge_ij,
         edge_modulation=EdgeModulation(
             atom_message=torch.zeros_like(atom_fea[graph.edge_index[0]]),
@@ -501,7 +500,6 @@ def test_interaction_block_uses_unscaled_residual_addition():
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_cutoff=torch.ones((edge_ij.shape[0], 1)),
-        angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_features=edge_ij,
         edge_modulation=EdgeModulation(
             atom_message=torch.zeros_like(atom_fea[graph.edge_index[0]]),
@@ -772,7 +770,6 @@ def test_interaction_block_updates_triplet_then_pair_then_atom():
     features = GeometryFeatures(
         edge_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_cutoff=torch.ones((edge_ij.shape[0], 1)),
-        angle_radial_basis=torch.empty((edge_ij.shape[0], 0)),
         edge_features=edge_ij,
         edge_modulation=edge_modulation,
         triplet_modulation=triplet_modulation,
