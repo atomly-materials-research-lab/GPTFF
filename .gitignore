@@ -1,4 +1,3 @@
-*.txt
 .DS_Store
 .DS_store
 __pycache__/
@@ -19,8 +18,7 @@ dist/
 curr_checkpoint.pth
 best_checkpoint.pth
 learn/
-architecture.md
 
-*.sh
+/architecture.md
 /main.py
 *.cpp
