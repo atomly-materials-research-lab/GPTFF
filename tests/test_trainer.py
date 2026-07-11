@@ -59,7 +59,7 @@ def test_trainer_config_parses_sections_without_side_effects():
     assert config.num_workers == 0
     assert config.optimizer_name == "AdamW"
     assert config.scheduler == "CosLR"
-    assert config.scheduler_params["decay_fraction"] == pytest.approx(0.01)
+    assert config.scheduler_params == {}
     assert config.dataset_path == "dataset.json"
     assert config.dataset_format == "atomic_json"
     assert config.validation_fraction == pytest.approx(0.5)
@@ -311,6 +311,72 @@ def test_coslr_rejects_warmup_that_covers_full_schedule():
                 "warmup_epochs": 1,
             },
         )
+
+
+@pytest.mark.parametrize(
+    ("scheduler_name", "scheduler_type"),
+    [
+        ("exp", torch.optim.lr_scheduler.ExponentialLR),
+        ("multistep", torch.optim.lr_scheduler.MultiStepLR),
+    ],
+)
+def test_non_cosine_schedulers_build_with_default_config(
+    scheduler_name,
+    scheduler_type,
+):
+    raw_config = _canonical_config()
+    raw_config["optimizer"]["scheduler"] = scheduler_name
+    raw_config["optimizer"].pop("scheduler_params")
+    config = TrainingConfig.from_dict(raw_config)
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+
+    scheduler = build_lr_scheduler(
+        optimizer,
+        scheduler=config.scheduler,
+        learning_rate=config.lr,
+        epochs=config.epochs,
+        scheduler_params=config.scheduler_params,
+    )
+
+    assert config.scheduler_params == {}
+    assert isinstance(scheduler, scheduler_type)
+
+
+@pytest.mark.parametrize("scheduler_name", ["exp", "multistep"])
+def test_non_cosine_schedulers_reject_cosine_minimum_lr_config(scheduler_name):
+    raw_config = _canonical_config()
+    raw_config["optimizer"]["scheduler"] = scheduler_name
+    raw_config["optimizer"].pop("scheduler_params")
+    raw_config["optimizer"]["min_learning_rate"] = 1e-5
+    config = TrainingConfig.from_dict(raw_config)
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+
+    with pytest.raises(ValueError, match="min_learning_rate.*only supported by cosine"):
+        build_lr_scheduler(
+            optimizer,
+            scheduler=config.scheduler,
+            learning_rate=config.lr,
+            epochs=config.epochs,
+            scheduler_params=config.scheduler_params,
+        )
+
+
+@pytest.mark.parametrize("scheduler_name", ["cosrestart", "exp", "multistep"])
+def test_scheduler_control_params_are_not_forwarded_to_torch(scheduler_name):
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    scheduler = build_lr_scheduler(
+        optimizer,
+        scheduler=scheduler_name,
+        learning_rate=1e-3,
+        epochs=10,
+        scheduler_params={"steps_per_epoch": 4},
+    )
+
+    assert scheduler is not None
 
 
 def test_training_config_parses_distributed_modes():

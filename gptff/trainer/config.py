@@ -43,7 +43,7 @@ class OptimizerConfig:
     name: str = "AdamW"
     weight_decay: float = 1e-2
     scheduler: str = "CosLR"
-    scheduler_params: dict[str, Any] = field(default_factory=lambda: {"decay_fraction": 1e-2})
+    scheduler_params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -581,7 +581,7 @@ def _scheduler_params(optimizer: Mapping[str, Any], epochs: int) -> dict[str, An
             )
         )
 
-    return params or {"decay_fraction": 1e-2}
+    return params
 
 
 def _config_value(

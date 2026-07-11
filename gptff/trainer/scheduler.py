@@ -16,6 +16,12 @@ from torch.optim.lr_scheduler import (
 
 Scheduler = _LRScheduler | CosineAnnealingWarmRestarts
 DEFAULT_SCHEDULER_STEPS_PER_EPOCH = 10
+COSINE_SCHEDULERS = frozenset({"cosineannealinglr", "coslr", "cos", "cosine"})
+COSINE_RESTART_SCHEDULERS = frozenset(
+    {"cosrestartlr", "cosineannealingwarmrestarts", "cosrestart"}
+)
+EXPONENTIAL_SCHEDULERS = frozenset({"exponentiallr", "exp", "exponential"})
+MULTISTEP_SCHEDULERS = frozenset({"multisteplr", "multistep"})
 
 
 def scheduler_steps_per_epoch(
@@ -44,10 +50,17 @@ def build_lr_scheduler(
     if name in {"none", "off", "constant"}:
         return None
 
-    if name in {"cosineannealinglr", "coslr", "cos", "cosine"}:
+    if name in EXPONENTIAL_SCHEDULERS | MULTISTEP_SCHEDULERS and "decay_fraction" in params:
+        raise ValueError(
+            "decay_fraction, min_learning_rate, and min_lr are only supported by "
+            "cosine schedulers."
+        )
+
+    steps_per_epoch = scheduler_steps_per_epoch(params)
+    params.pop("steps_per_epoch", None)
+
+    if name in COSINE_SCHEDULERS:
         decay_fraction = float(params.pop("decay_fraction", 1e-2))
-        steps_per_epoch = scheduler_steps_per_epoch(params)
-        params.pop("steps_per_epoch", None)
         t_max = int(params.pop("T_max", params.pop("t_max", steps_per_epoch * epochs)))
         warmup_steps = int(params.pop("warmup_steps", 0))
         warmup_epochs = float(params.pop("warmup_epochs", 0.0))
@@ -82,7 +95,7 @@ def build_lr_scheduler(
 
         return LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-    if name in {"cosrestartlr", "cosineannealingwarmrestarts", "cosrestart"}:
+    if name in COSINE_RESTART_SCHEDULERS:
         decay_fraction = float(params.pop("decay_fraction", 1e-2))
         params.setdefault("T_0", 10)
         params.setdefault("T_mult", 2)
@@ -92,11 +105,11 @@ def build_lr_scheduler(
             **params,
         )
 
-    if name in {"exponentiallr", "exp", "exponential"}:
+    if name in EXPONENTIAL_SCHEDULERS:
         params.setdefault("gamma", 0.98)
         return ExponentialLR(optimizer, **params)
 
-    if name in {"multisteplr", "multistep"}:
+    if name in MULTISTEP_SCHEDULERS:
         params.setdefault("milestones", [4 * epochs, 6 * epochs, 8 * epochs, 9 * epochs])
         params.setdefault("gamma", 0.3)
         return MultiStepLR(optimizer, **params)
