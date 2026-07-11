@@ -177,13 +177,20 @@ def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Opt
 def build_scheduler(
     optimizer: optim.Optimizer,
     config: TrainingConfig,
+    *,
+    num_batches: int,
 ) -> Scheduler | None:
+    scheduler_params = config.scheduler_params
+    scheduler_params["steps_per_epoch"] = effective_scheduler_steps_per_epoch(
+        num_batches,
+        scheduler_params,
+    )
     return build_lr_scheduler(
         optimizer,
         scheduler=config.scheduler,
         learning_rate=config.lr,
         epochs=config.epochs,
-        scheduler_params=config.scheduler_params,
+        scheduler_params=scheduler_params,
     )
 
 
@@ -197,6 +204,16 @@ def scheduler_step_batches(
         min(num_batches, max(1, math.ceil(num_batches * step / steps_per_epoch)))
         for step in range(1, steps_per_epoch + 1)
     }
+
+
+def effective_scheduler_steps_per_epoch(
+    num_batches: int,
+    scheduler_params,
+) -> int:
+    if num_batches <= 0:
+        raise ValueError("Cannot build an LR schedule for an empty training loader.")
+    requested_steps = scheduler_steps_per_epoch(scheduler_params)
+    return min(int(num_batches), requested_steps)
 
 
 def use_cuda_amp(config: TrainingConfig) -> bool:
@@ -315,7 +332,10 @@ def train_one_epoch(
     scheduler_batches = (
         scheduler_step_batches(
             len(train_loader),
-            steps_per_epoch=scheduler_steps_per_epoch(config.scheduler_params),
+            steps_per_epoch=effective_scheduler_steps_per_epoch(
+                len(train_loader),
+                config.scheduler_params,
+            ),
         )
         if scheduler is not None
         else set()
@@ -344,6 +364,7 @@ def train_one_epoch(
         if should_skip_optimizer_step(batch_loss, distributed, device=config.device):
             metrics.skipped_batches += 1
             progress.set_postfix(skipped=metrics.skipped_batches, refresh=False)
+            # Keep the LR schedule aligned with successful parameter updates.
             continue
 
         optimizer.zero_grad(set_to_none=True)
@@ -515,7 +536,11 @@ class Trainer:
         self._print(f"Number of Model parameters: {count_parameters(raw_model)}")
 
         self.optimizer = build_optimizer(raw_model, self.config)
-        self.scheduler = build_scheduler(self.optimizer, self.config)
+        self.scheduler = build_scheduler(
+            self.optimizer,
+            self.config,
+            num_batches=len(self.train_loader),
+        )
         self.model = wrap_distributed_model(raw_model, self.distributed)
         self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
 

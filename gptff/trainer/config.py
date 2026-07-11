@@ -210,7 +210,7 @@ class TrainingConfig:
                 learning_rate=float(_config_value(optimizer, "learning_rate", "lr")),
                 weight_decay=float(optimizer.get("weight_decay", default_weight_decay)),
                 scheduler=str(optimizer.get("scheduler", "CosLR")),
-                scheduler_params=_scheduler_params(optimizer, epochs),
+                scheduler_params=_scheduler_params(optimizer),
             ),
             training=TrainingLoopConfig(
                 epochs=epochs,
@@ -554,7 +554,7 @@ def _tuple_of_str(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
-def _scheduler_params(optimizer: Mapping[str, Any], epochs: int) -> dict[str, Any]:
+def _scheduler_params(optimizer: Mapping[str, Any]) -> dict[str, Any]:
     if "scheduler_params" in optimizer:
         return dict(optimizer["scheduler_params"])
 
@@ -571,15 +571,10 @@ def _scheduler_params(optimizer: Mapping[str, Any], epochs: int) -> dict[str, An
         )
         params["decay_fraction"] = min_learning_rate / learning_rate
 
-    if "lr_cycle_epochs" in optimizer or "num_train_steps" in optimizer:
-        params["T_max"] = int(
-            _config_value(
-                optimizer,
-                "lr_cycle_epochs",
-                "num_train_steps",
-                default=10 * epochs,
-            )
-        )
+    if "lr_cycle_epochs" in optimizer:
+        params["lr_cycle_epochs"] = float(optimizer["lr_cycle_epochs"])
+    if "num_train_steps" in optimizer:
+        params["T_max"] = int(optimizer["num_train_steps"])
 
     return params
 

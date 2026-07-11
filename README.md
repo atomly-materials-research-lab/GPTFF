@@ -124,6 +124,14 @@ datasets without stress.
 - `data`: dataset path, dataset format, split fractions, split seed,
   material-grouped splitting, and graph caching.
 
+Scheduler timing uses at most `optimizer.scheduler_params.steps_per_epoch`
+successful optimizer updates per epoch (default: 10), automatically capped by
+the number of training batches. Batches skipped for non-finite losses do not
+advance the schedule. `warmup_epochs` and `lr_cycle_epochs` use epoch units, while
+`warmup_steps`, `T_max`, and the legacy `num_train_steps` use scheduler-update
+units. A non-restarting cosine schedule stays at its minimum learning rate after
+the configured decay interval.
+
 For large datasets, GPTFF also supports precomputed sharded HDF5 graph datasets:
 
 ```yaml

@@ -6,15 +6,14 @@ from typing import Any
 
 import torch
 from torch.optim.lr_scheduler import (
-    CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
     ExponentialLR,
     LambdaLR,
+    LRScheduler,
     MultiStepLR,
-    _LRScheduler,
 )
 
-Scheduler = _LRScheduler | CosineAnnealingWarmRestarts
+Scheduler = LRScheduler
 DEFAULT_SCHEDULER_STEPS_PER_EPOCH = 10
 COSINE_SCHEDULERS = frozenset({"cosineannealinglr", "coslr", "cos", "cosine"})
 COSINE_RESTART_SCHEDULERS = frozenset(
@@ -55,13 +54,27 @@ def build_lr_scheduler(
             "decay_fraction, min_learning_rate, and min_lr are only supported by "
             "cosine schedulers."
         )
+    if name not in COSINE_SCHEDULERS and "lr_cycle_epochs" in params:
+        raise ValueError("lr_cycle_epochs is only supported by non-restarting cosine schedulers.")
 
     steps_per_epoch = scheduler_steps_per_epoch(params)
     params.pop("steps_per_epoch", None)
 
     if name in COSINE_SCHEDULERS:
         decay_fraction = float(params.pop("decay_fraction", 1e-2))
-        t_max = int(params.pop("T_max", params.pop("t_max", steps_per_epoch * epochs)))
+        cycle_epochs = params.pop("lr_cycle_epochs", None)
+        configured_t_max = params.pop("T_max", params.pop("t_max", None))
+        if cycle_epochs is not None and configured_t_max is not None:
+            raise ValueError("Pass either lr_cycle_epochs or T_max, not both.")
+        if cycle_epochs is not None:
+            cycle_epochs = float(cycle_epochs)
+            if cycle_epochs <= 0:
+                raise ValueError("lr_cycle_epochs must be positive.")
+            t_max = int(math.ceil(cycle_epochs * steps_per_epoch))
+        else:
+            t_max = steps_per_epoch * epochs if configured_t_max is None else int(configured_t_max)
+        if t_max <= 0:
+            raise ValueError("T_max must be positive.")
         warmup_steps = int(params.pop("warmup_steps", 0))
         warmup_epochs = float(params.pop("warmup_epochs", 0.0))
         if warmup_steps <= 0 and warmup_epochs > 0.0:
@@ -69,14 +82,6 @@ def build_lr_scheduler(
         warmup_start_factor = float(
             params.pop("warmup_start_factor", params.pop("warmup_factor", 0.1))
         )
-
-        if warmup_steps <= 0:
-            return CosineAnnealingLR(
-                optimizer,
-                T_max=t_max,
-                eta_min=decay_fraction * learning_rate,
-                **params,
-            )
 
         if not 0.0 <= warmup_start_factor <= 1.0:
             raise ValueError("warmup_start_factor must be in the interval [0, 1].")
@@ -86,10 +91,10 @@ def build_lr_scheduler(
         cosine_steps = max(1, t_max - warmup_steps)
 
         def lr_lambda(step: int) -> float:
-            if step <= warmup_steps:
+            if warmup_steps > 0 and step <= warmup_steps:
                 alpha = step / float(warmup_steps)
                 return warmup_start_factor * (1.0 - alpha) + alpha
-            progress = min((step - warmup_steps) / float(cosine_steps), 1.0)
+            progress = min(max((step - warmup_steps) / float(cosine_steps), 0.0), 1.0)
             cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
             return decay_fraction + (1.0 - decay_fraction) * cosine_factor
 
@@ -110,7 +115,11 @@ def build_lr_scheduler(
         return ExponentialLR(optimizer, **params)
 
     if name in MULTISTEP_SCHEDULERS:
-        params.setdefault("milestones", [4 * epochs, 6 * epochs, 8 * epochs, 9 * epochs])
+        total_steps = steps_per_epoch * epochs
+        params.setdefault(
+            "milestones",
+            [math.ceil(fraction * total_steps) for fraction in (0.4, 0.6, 0.8, 0.9)],
+        )
         params.setdefault("gamma", 0.3)
         return MultiStepLR(optimizer, **params)
 
