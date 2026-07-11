@@ -26,7 +26,7 @@ def test_periodic_self_images_are_kept():
     }
 
 
-def test_offset_convention_matches_edge_distance():
+def test_offset_convention_produces_cutoff_bounded_vectors():
     structure = Structure(
         Lattice.cubic(3.0),
         ["Na", "Cl"],
@@ -39,7 +39,9 @@ def test_offset_convention_matches_edge_distance():
         + graph.edge_offsets @ graph.lattice
         - graph.positions[graph.edge_index[0]]
     )
-    assert np.allclose(np.linalg.norm(vectors, axis=1), graph.edge_distances)
+    distances = np.linalg.norm(vectors, axis=1)
+    assert np.all(distances > 0.0)
+    assert np.all(distances <= graph.radial_cutoff + 1e-8)
 
 
 def test_triplets_are_ordered_edge_pairs_with_same_center():
@@ -47,8 +49,14 @@ def test_triplets_are_ordered_edge_pairs_with_same_center():
     graph = CrystalGraphConverter(radial_cutoff=2.1, angle_cutoff=2.1).convert(structure)
 
     assert graph.num_triplets == 30
-    assert graph.triplets_per_atom.tolist() == [30]
-    assert graph.triplets_per_edge.tolist() == [5, 5, 5, 5, 5, 5]
+    assert np.bincount(graph.triplet_edge_index[0], minlength=graph.num_edges).tolist() == [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+    ]
     assert np.all(graph.triplet_edge_index[0] != graph.triplet_edge_index[1])
     assert np.all(
         graph.edge_index[0][graph.triplet_edge_index[0]]

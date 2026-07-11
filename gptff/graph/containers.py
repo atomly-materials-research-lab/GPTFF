@@ -16,10 +16,7 @@ class CrystalGraph:
     angle_cutoff: float
     edge_index: np.ndarray
     edge_offsets: np.ndarray
-    edge_distances: np.ndarray
     triplet_edge_index: np.ndarray
-    triplets_per_atom: np.ndarray
-    triplets_per_edge: np.ndarray
 
     @property
     def num_atoms(self) -> int:
@@ -51,10 +48,7 @@ class CrystalGraphBatch:
     angle_cutoff: float
     edge_index: torch.Tensor
     edge_offsets: torch.Tensor
-    edge_distances: torch.Tensor
     triplet_edge_index: torch.Tensor
-    triplets_per_atom: torch.Tensor
-    triplets_per_edge: torch.Tensor
     num_atoms: torch.Tensor
     num_edges: torch.Tensor
     atom_batch: torch.Tensor
@@ -85,10 +79,7 @@ class CrystalGraphBatch:
         atom_types = np.concatenate([graph.atom_types for graph in graphs])
         positions = np.concatenate([graph.positions for graph in graphs], axis=0)
         lattice = np.stack([graph.lattice for graph in graphs], axis=0)
-        edge_distances = np.concatenate([graph.edge_distances for graph in graphs])
         graph_edge_offsets = np.concatenate([graph.edge_offsets for graph in graphs], axis=0)
-        triplets_per_atom = np.concatenate([graph.triplets_per_atom for graph in graphs])
-        triplets_per_edge = np.concatenate([graph.triplets_per_edge for graph in graphs])
 
         shifted_edges = []
         shifted_triplets = []
@@ -110,10 +101,7 @@ class CrystalGraphBatch:
             angle_cutoff=angle_cutoff,
             edge_index=torch.tensor(edge_index, dtype=torch.long),
             edge_offsets=torch.tensor(graph_edge_offsets, dtype=torch.float32),
-            edge_distances=torch.tensor(edge_distances, dtype=torch.float32),
             triplet_edge_index=torch.tensor(triplet_edge_index, dtype=torch.long),
-            triplets_per_atom=torch.tensor(triplets_per_atom, dtype=torch.long),
-            triplets_per_edge=torch.tensor(triplets_per_edge, dtype=torch.long),
             num_atoms=torch.tensor(atom_counts, dtype=torch.long),
             num_edges=torch.tensor(edge_counts, dtype=torch.long),
             atom_batch=torch.tensor(atom_batch, dtype=torch.long),

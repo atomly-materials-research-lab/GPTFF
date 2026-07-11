@@ -136,10 +136,7 @@ def _sample(atom_types, energy):
         angle_cutoff=3.5,
         edge_index=np.empty((2, 0), dtype=np.int64),
         edge_offsets=np.empty((0, 3), dtype=np.float32),
-        edge_distances=np.empty((0,), dtype=np.float32),
         triplet_edge_index=np.empty((2, 0), dtype=np.int64),
-        triplets_per_atom=np.zeros((len(atom_types),), dtype=np.int64),
-        triplets_per_edge=np.empty((0,), dtype=np.int64),
     )
     return GraphSample(
         graph=graph,

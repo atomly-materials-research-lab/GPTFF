@@ -41,15 +41,8 @@ def _make_disconnected_double_graph(graph: CrystalGraph) -> CrystalGraph:
         angle_cutoff=graph.angle_cutoff,
         edge_index=np.concatenate([graph.edge_index, graph.edge_index + atom_offset], axis=1),
         edge_offsets=np.concatenate([graph.edge_offsets, graph.edge_offsets], axis=0),
-        edge_distances=np.concatenate([graph.edge_distances, graph.edge_distances], axis=0),
         triplet_edge_index=np.concatenate(
             [graph.triplet_edge_index, graph.triplet_edge_index + edge_offset],
             axis=1,
-        ),
-        triplets_per_atom=np.concatenate(
-            [graph.triplets_per_atom, graph.triplets_per_atom], axis=0
-        ),
-        triplets_per_edge=np.concatenate(
-            [graph.triplets_per_edge, graph.triplets_per_edge], axis=0
         ),
     )

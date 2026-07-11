@@ -345,10 +345,7 @@ def write_graph_sample_group(
     _dataset(group, "lattice", graph.lattice, dtype=np.float32)
     _dataset(group, "edge_index", graph.edge_index, dtype=np.int64)
     _dataset(group, "edge_offsets", graph.edge_offsets, dtype=np.float32)
-    _dataset(group, "edge_distances", graph.edge_distances, dtype=np.float32)
     _dataset(group, "triplet_edge_index", graph.triplet_edge_index, dtype=np.int64)
-    _dataset(group, "triplets_per_atom", graph.triplets_per_atom, dtype=np.int64)
-    _dataset(group, "triplets_per_edge", graph.triplets_per_edge, dtype=np.int64)
     _dataset(group, "forces", np.asarray(forces, dtype=np.float32), dtype=np.float32)
     if stress is not None:
         _dataset(group, "stress", np.asarray(stress, dtype=np.float32), dtype=np.float32)
@@ -363,10 +360,7 @@ def read_graph_sample_group(group) -> GraphSample:
         angle_cutoff=float(group.attrs["angle_cutoff"]),
         edge_index=group["edge_index"][()].astype(np.int64, copy=False),
         edge_offsets=group["edge_offsets"][()].astype(np.float32, copy=False),
-        edge_distances=group["edge_distances"][()].astype(np.float32, copy=False),
         triplet_edge_index=group["triplet_edge_index"][()].astype(np.int64, copy=False),
-        triplets_per_atom=group["triplets_per_atom"][()].astype(np.int64, copy=False),
-        triplets_per_edge=group["triplets_per_edge"][()].astype(np.int64, copy=False),
     )
     raw_stress = group["stress"][()] if "stress" in group else None
     return GraphSample(

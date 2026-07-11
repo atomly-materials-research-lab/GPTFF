@@ -46,7 +46,7 @@ class CrystalGraphConverter:
             offsets = np.empty((0, 3), dtype=np.int64)
             distances = np.empty((0,), dtype=np.float32)
 
-        triplet_edge_index, triplets_per_atom, triplets_per_edge = enumerate_triplets(
+        triplet_edge_index = enumerate_triplets(
             edge_index=edge_index,
             edge_distances=distances,
             angle_cutoff=self.angle_cutoff,
@@ -62,10 +62,7 @@ class CrystalGraphConverter:
             angle_cutoff=float(self.angle_cutoff),
             edge_index=edge_index,
             edge_offsets=offsets.astype(np.float32, copy=False),
-            edge_distances=distances,
             triplet_edge_index=triplet_edge_index,
-            triplets_per_atom=triplets_per_atom,
-            triplets_per_edge=triplets_per_edge,
         )
 
     def convert_ase_atoms(self, atoms) -> CrystalGraph:
@@ -79,13 +76,11 @@ def enumerate_triplets(
     angle_cutoff: float,
     num_atoms: int,
     numerical_tol: float = 1e-8,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> np.ndarray:
     num_edges = edge_index.shape[1]
-    triplets_per_atom = np.zeros(num_atoms, dtype=np.int64)
-    triplets_per_edge = np.zeros(num_edges, dtype=np.int64)
 
     if num_edges == 0:
-        return np.empty((2, 0), dtype=np.int64), triplets_per_atom, triplets_per_edge
+        return np.empty((2, 0), dtype=np.int64)
 
     angle_edge_ids = np.flatnonzero(edge_distances <= angle_cutoff + numerical_tol)
     edges_by_center = [[] for _ in range(num_atoms)]
@@ -95,19 +90,17 @@ def enumerate_triplets(
         edges_by_center[int(centers[edge_id])].append(int(edge_id))
 
     triplets: list[tuple[int, int]] = []
-    for atom_id, edge_ids in enumerate(edges_by_center):
+    for edge_ids in edges_by_center:
         num_angle_edges = len(edge_ids)
-        triplets_per_atom[atom_id] = num_angle_edges * (num_angle_edges - 1)
         if num_angle_edges < 2:
             continue
 
         for edge_ij in edge_ids:
-            triplets_per_edge[edge_ij] = num_angle_edges - 1
             for edge_ik in edge_ids:
                 if edge_ij != edge_ik:
                     triplets.append((edge_ij, edge_ik))
 
     if not triplets:
-        return np.empty((2, 0), dtype=np.int64), triplets_per_atom, triplets_per_edge
+        return np.empty((2, 0), dtype=np.int64)
 
-    return np.asarray(triplets, dtype=np.int64).T, triplets_per_atom, triplets_per_edge
+    return np.asarray(triplets, dtype=np.int64).T

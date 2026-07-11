@@ -1,3 +1,4 @@
+import h5py
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -175,6 +176,12 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
                 sample_id=sample.sample_id,
                 material_id=sample.material_id,
             )
+
+    with h5py.File(output / "shards" / "shard_000000.h5", "r") as shard:
+        stored_fields = set(shard["sample_00000000"])
+    assert stored_fields.isdisjoint(
+        {"edge_distances", "triplets_per_atom", "triplets_per_edge"}
+    )
 
     dataset = ShardedGraphDataset(output)
     subset = dataset.subset([1], name="validation")
