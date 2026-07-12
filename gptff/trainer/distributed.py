@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -108,6 +109,14 @@ def all_reduce_max(tensor: torch.Tensor, context: DistributedContext) -> torch.T
     if context.enabled:
         dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
     return tensor
+
+
+def gather_object_to_main(value: Any, context: DistributedContext) -> list[Any] | None:
+    if not context.enabled:
+        return [value]
+    gathered = [None] * context.world_size if context.is_main_process else None
+    dist.gather_object(value, gathered, dst=0)
+    return gathered
 
 
 def cleanup_distributed(context: DistributedContext) -> None:

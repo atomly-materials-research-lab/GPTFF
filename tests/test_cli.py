@@ -22,15 +22,34 @@ def test_train_command_loads_config_and_starts_training(monkeypatch, tmp_path) -
         calls.append(("load", path))
         return loaded_config
 
-    def fake_run_training(config) -> None:
-        calls.append(("train", config))
+    def fake_run_training(config, *, resume_from=None) -> None:
+        calls.append(("train", config, resume_from))
 
     monkeypatch.setattr(trainer_config, "load_config", fake_load_config)
     monkeypatch.setattr(trainer_module, "run_training", fake_run_training)
 
     cli_main.main(["train", str(config_path)])
 
-    assert calls == [("load", config_path), ("train", loaded_config)]
+    assert calls == [("load", config_path), ("train", loaded_config, None)]
+
+
+def test_train_command_forwards_resume_checkpoint(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = tmp_path / "last.pt"
+    calls = []
+
+    monkeypatch.setattr(trainer_config, "load_config", lambda _path: object())
+    monkeypatch.setattr(
+        trainer_module,
+        "run_training",
+        lambda _config, *, resume_from=None: calls.append(resume_from),
+    )
+
+    cli_main.main(
+        ["train", str(config_path), "--resume", str(checkpoint_path)]
+    )
+
+    assert calls == [checkpoint_path]
 
 
 def test_relaxation_command_calls_relaxation_and_writes_structure(

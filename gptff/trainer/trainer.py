@@ -19,7 +19,14 @@ from gptff.data import (
     load_training_dataset,
 )
 from gptff.model import GPTFF
-from gptff.trainer.checkpoint import save_checkpoint
+from gptff.trainer.checkpoint import (
+    capture_local_rng_state,
+    format_resume_config_error,
+    load_training_checkpoint,
+    restore_local_rng_state,
+    resume_config_differences,
+    save_checkpoint,
+)
 from gptff.trainer.config import TrainingConfig
 from gptff.trainer.distributed import (
     DistributedContext,
@@ -27,6 +34,7 @@ from gptff.trainer.distributed import (
     all_reduce_sum,
     barrier,
     cleanup_distributed,
+    gather_object_to_main,
     initialize_distributed,
     unwrap_model,
     wrap_distributed_model,
@@ -43,6 +51,7 @@ from gptff.trainer.logger import (
     NullLogger,
     TrainingLogger,
     WandBLogger,
+    reconcile_history_for_resume,
 )
 from gptff.trainer.loss import (
     BatchLoss,
@@ -467,9 +476,17 @@ def build_epoch_log_record(
 
 
 class Trainer:
-    def __init__(self, config: TrainingConfig, logger: TrainingLogger | None = None):
+    def __init__(
+        self,
+        config: TrainingConfig,
+        logger: TrainingLogger | None = None,
+        *,
+        resume_from: str | Path | None = None,
+    ):
         self.config = config
         self.output_dir = Path(config.training.output_dir)
+        self.resume_from = None if resume_from is None else Path(resume_from).expanduser()
+        self.start_epoch = 1
         self.criterion: nn.Module = nn.HuberLoss()
         self.model: torch.nn.Module | None = None
         self.optimizer: optim.Optimizer | None = None
@@ -484,6 +501,7 @@ class Trainer:
         self.best_energy_mae = float("inf")
         self.best_force_mae = float("inf")
         self.logger = logger
+        self._history_paths: tuple[Path, ...] = ()
 
     def setup(self, dataset: AtomicDataset | None = None) -> None:
         self.distributed = initialize_distributed(
@@ -503,6 +521,9 @@ class Trainer:
         if self.distributed.is_main_process:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         barrier(self.distributed)
+        resume_checkpoint = self._load_resume_checkpoint()
+        if resume_checkpoint is not None:
+            self._restore_fitted_element_refs(resume_checkpoint)
         if self.logger is not None and not self.distributed.is_main_process:
             self.logger = NullLogger()
         if self.logger is None:
@@ -516,15 +537,17 @@ class Trainer:
                 )
             else:
                 self.logger = NullLogger()
+        self._history_paths = _logger_history_paths(self.logger, self.output_dir)
         if dataset is None:
             dataset = load_training_dataset(self.config)
         if not isinstance(dataset, (AtomicDataset, ShardedGraphDataset)):
             raise TypeError("dataset must be an AtomicDataset or ShardedGraphDataset.")
-        apply_fitted_element_refs(
-            self.config,
-            dataset,
-            verbose=self.distributed.is_main_process,
-        )
+        if resume_checkpoint is None:
+            apply_fitted_element_refs(
+                self.config,
+                dataset,
+                verbose=self.distributed.is_main_process,
+            )
         datasets = build_graph_datasets(
             dataset,
             self.config,
@@ -557,8 +580,110 @@ class Trainer:
             self.config,
             num_batches=len(self.train_loader),
         )
-        self.model = wrap_distributed_model(raw_model, self.distributed)
         self.scaler = GradScaler("cuda", enabled=use_cuda_amp(self.config))
+        if resume_checkpoint is not None:
+            self._restore_training_checkpoint(raw_model, resume_checkpoint)
+        self.model = wrap_distributed_model(raw_model, self.distributed)
+
+    def _load_resume_checkpoint(self) -> dict | None:
+        if self.resume_from is None:
+            return None
+        checkpoint_path = self.resume_from.resolve()
+        if checkpoint_path.parent != self.output_dir.resolve():
+            raise ValueError(
+                "resume checkpoint must be in training.output_dir so existing best "
+                "checkpoints remain available."
+            )
+        return load_training_checkpoint(
+            checkpoint_path,
+            device=self.config.training.device,
+        )
+
+    def _restore_fitted_element_refs(self, checkpoint: dict) -> None:
+        if not self.config.element_references.fit_from_training_data:
+            return
+        if self.config.model.element_refs is not None:
+            raise ValueError(
+                "element_references.source='fit' cannot be combined with preloaded "
+                "element refs."
+            )
+        saved_element_refs = checkpoint["model_config"].get("element_refs")
+        if saved_element_refs is None:
+            raise ValueError(
+                "Resume checkpoint does not contain fitted element_refs required by "
+                "element_references.source='fit'."
+            )
+        self.config.model = replace(
+            self.config.model,
+            element_refs=saved_element_refs,
+        )
+        self._print("Using fitted element_refs from the resume checkpoint.")
+
+    def _restore_training_checkpoint(
+        self,
+        raw_model: torch.nn.Module,
+        checkpoint: dict,
+    ) -> None:
+        checkpoint_path = self.resume_from.resolve()
+        differences = resume_config_differences(
+            checkpoint,
+            self.config,
+            world_size=self.distributed.world_size,
+            data_state=self._training_data_state(),
+        )
+        if differences:
+            raise ValueError(format_resume_config_error(differences))
+
+        rng_states = checkpoint["rng_states"]
+        if len(rng_states) != self.distributed.world_size:
+            raise ValueError(
+                f"Checkpoint has {len(rng_states)} RNG states, but current world size "
+                f"is {self.distributed.world_size}."
+            )
+        saved_scheduler_state = checkpoint["scheduler_state_dict"]
+        if (self.scheduler is None) != (saved_scheduler_state is None):
+            raise ValueError("Checkpoint scheduler state does not match current scheduler.")
+        if bool(checkpoint["amp_scaler_enabled"]) != self.scaler.is_enabled():
+            raise ValueError(
+                "Checkpoint AMP scaler state does not match AMP availability on the "
+                "current device."
+            )
+        for metric_name, filename in (
+            ("best_energy_mae", "bestE.pt"),
+            ("best_force_mae", "bestF.pt"),
+        ):
+            if math.isfinite(float(checkpoint[metric_name])) and not (
+                self.output_dir / filename
+            ).is_file():
+                raise ValueError(
+                    f"Resume checkpoint references {metric_name}, but {filename} is missing "
+                    f"from {self.output_dir}."
+                )
+        saved_epoch = int(checkpoint["epoch"])
+        if saved_epoch >= self.config.training.epochs:
+            raise ValueError(
+                f"Checkpoint has completed epoch {saved_epoch}/"
+                f"{self.config.training.epochs}; training is already finished."
+            )
+
+        raw_model.load_state_dict(checkpoint["state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if self.scheduler is not None:
+            self.scheduler.load_state_dict(saved_scheduler_state)
+        self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        self.best_energy_mae = float(checkpoint["best_energy_mae"])
+        self.best_force_mae = float(checkpoint["best_force_mae"])
+
+        self.start_epoch = saved_epoch + 1
+        restore_local_rng_state(
+            rng_states[self.distributed.rank],
+            self.data_loader_generators,
+            device=self.config.training.device,
+        )
+        if self.distributed.is_main_process:
+            for history_path in self._history_paths:
+                reconcile_history_for_resume(history_path, saved_epoch)
+        self._print(f"Resuming training from epoch {self.start_epoch} ({checkpoint_path}).")
 
     def _print(self, message: str) -> None:
         if self.distributed.is_main_process:
@@ -639,6 +764,7 @@ class Trainer:
                 state = torch.load(
                     checkpoint_path,
                     map_location=torch.device(self.config.training.device),
+                    weights_only=True,
                 )
                 raw_model.load_state_dict(state["state_dict"])
                 checkpoint_name = checkpoint_filename
@@ -669,9 +795,11 @@ class Trainer:
     def fit(self, dataset: AtomicDataset | None = None) -> float:
         try:
             self.setup(dataset)
-            for epoch in range(self.config.training.epochs):
+            for current_epoch in range(
+                self.start_epoch,
+                self.config.training.epochs + 1,
+            ):
                 lr = optimizer_lr(self.optimizer)
-                current_epoch = epoch + 1
                 self._print(
                     f"Epoch: [{current_epoch}/{self.config.training.epochs}], lr: {lr:.4e}"
                 )
@@ -694,16 +822,27 @@ class Trainer:
                 is_best_force = validation_force_mae < self.best_force_mae
                 self.best_energy_mae = min(validation_energy_mae, self.best_energy_mae)
                 self.best_force_mae = min(validation_force_mae, self.best_force_mae)
+                local_rng_state = capture_local_rng_state(
+                    self.data_loader_generators,
+                    device=self.config.training.device,
+                )
+                rng_states = gather_object_to_main(local_rng_state, self.distributed)
                 if self.distributed.is_main_process:
                     save_checkpoint(
                         self.output_dir,
                         unwrap_model(self.model),
+                        self.optimizer,
+                        self.scheduler,
+                        self.scaler,
                         self.config,
                         epoch=current_epoch,
                         best_energy_mae=self.best_energy_mae,
                         best_force_mae=self.best_force_mae,
                         is_best_energy=is_best_energy,
                         is_best_force=is_best_force,
+                        rng_states=rng_states,
+                        world_size=self.distributed.world_size,
+                        data_state=self._training_data_state(),
                     )
                 barrier(self.distributed)
             self.evaluate_test_set()
@@ -714,13 +853,44 @@ class Trainer:
 
         return self.best_force_mae
 
+    def _training_data_state(self) -> dict[str, int | None]:
+        return {
+            "train_samples": len(self.train_loader.dataset),
+            "validation_samples": len(self.val_loader.dataset),
+            "test_samples": (
+                None if self.test_loader is None else len(self.test_loader.dataset)
+            ),
+            "train_batches": len(self.train_loader),
+            "validation_batches": len(self.val_loader),
+            "test_batches": None if self.test_loader is None else len(self.test_loader),
+        }
+
 
 def run_training(
     config: TrainingConfig,
     dataset: AtomicDataset | None = None,
+    *,
+    resume_from: str | Path | None = None,
 ) -> float:
-    return Trainer(config).fit(dataset)
+    return Trainer(config, resume_from=resume_from).fit(dataset)
 
 
 def _clone_state_dict(state_dict):
     return {key: value.detach().cpu().clone() for key, value in state_dict.items()}
+
+
+def _logger_history_paths(
+    logger: TrainingLogger | None,
+    output_dir: Path,
+) -> tuple[Path, ...]:
+    if logger is None:
+        return (output_dir / "history.csv",)
+    if isinstance(logger, CSVLogger):
+        return (logger.path,)
+    if isinstance(logger, CompositeLogger):
+        return tuple(
+            path
+            for item in logger.loggers
+            for path in _logger_history_paths(item, output_dir)
+        )
+    return ()

@@ -94,6 +94,17 @@ Then launch training:
 gptff train config.yaml
 ```
 
+Resume an interrupted run from its latest complete epoch with:
+
+```bash
+gptff train config.yaml --resume output/last.pt
+```
+
+Resume requires the original trajectory-defining configuration and distributed
+world size. Runtime settings such as device, worker count, graph cache, logging,
+and output path settings may differ, although the resume checkpoint itself must
+remain in `training.output_dir` so the associated best checkpoints are available.
+
 For multi-GPU training, launch with PyTorch DDP:
 
 ```bash
@@ -145,9 +156,10 @@ data:
   dataset_format: sharded_hdf5_graph
 ```
 
-Checkpoints are written to the configured output directory. `last.pt` stores
-the latest checkpoint, while `bestE.pt` and `bestF.pt` store the best validation
-energy-MAE and force-MAE checkpoints.
+Checkpoints are written atomically to the configured output directory. `last.pt`
+contains the model, optimizer, scheduler, AMP scaler, random generators, and best
+metrics required for epoch-level resume. `bestE.pt` and `bestF.pt` are lightweight
+inference checkpoints for the best validation energy MAE and force MAE.
 
 ## Reference
 

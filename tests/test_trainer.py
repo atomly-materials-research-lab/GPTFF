@@ -1,4 +1,5 @@
 import json
+import random
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
+import gptff.trainer.checkpoint as checkpoint_module
 import gptff.trainer.loss as loss_module
 import gptff.trainer.trainer as trainer_module
 from gptff.data import (
@@ -20,21 +22,30 @@ from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
 from gptff.model.model import GPTFF
 from gptff.trainer import distributed as distributed_module
+from gptff.trainer.checkpoint import (
+    INFERENCE_CHECKPOINT_TYPE,
+    TRAINING_CHECKPOINT_TYPE,
+    capture_local_rng_state,
+    restore_local_rng_state,
+)
 from gptff.trainer.config import OptimizerConfig, load_config
 from gptff.trainer.distributed import (
     DistributedContext,
     barrier,
     cleanup_distributed,
+    gather_object_to_main,
     unwrap_model,
 )
 from gptff.trainer.evaluation import EvaluationRecord
 from gptff.trainer.logger import (
+    HISTORY_FIELDS,
     CompositeLogger,
     ConsoleLogger,
     CSVLogger,
     EpochLogRecord,
     NullLogger,
     WandBLogger,
+    reconcile_history_for_resume,
 )
 from gptff.trainer.loss import BatchLoss
 from gptff.trainer.scheduler import build_lr_scheduler, scheduler_steps_per_epoch
@@ -56,6 +67,7 @@ from gptff.trainer.trainer import (
     use_cuda_amp,
 )
 from gptff.utils.labels import EV_PER_ANG3_TO_GPA
+from gptff.utils.reproducibility import create_data_loader_generators
 
 
 def test_trainer_config_parses_sections_without_side_effects():
@@ -837,6 +849,218 @@ def test_trainer_fit_writes_final_test_metrics(tmp_path, monkeypatch, capsys):
     assert "test checkpoint=bestF.pt" in output
 
 
+@pytest.mark.parametrize("scheduler_name", ["CosLR", "none"])
+def test_interrupted_training_resumes_to_identical_state_and_history(
+    tmp_path,
+    monkeypatch,
+    scheduler_name,
+):
+    dataset = _atomic_dataset(size=4)
+    continuous_dir = tmp_path / scheduler_name / "continuous"
+    resumed_dir = tmp_path / scheduler_name / "resumed"
+
+    continuous_trainer = Trainer(
+        _resume_training_config(continuous_dir, scheduler=scheduler_name),
+        logger=NullLogger(),
+    )
+    continuous_trainer.fit(dataset)
+
+    original_save_checkpoint = trainer_module.save_checkpoint
+
+    def interrupt_after_epoch_two(*args, **kwargs):
+        original_save_checkpoint(*args, **kwargs)
+        if kwargs["epoch"] == 2:
+            raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", interrupt_after_epoch_two)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        Trainer(_resume_training_config(resumed_dir, scheduler=scheduler_name)).fit(dataset)
+
+    interrupted_state = torch.load(
+        resumed_dir / "last.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert interrupted_state["epoch"] == 2
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", original_save_checkpoint)
+    resumed_trainer = Trainer(
+        _resume_training_config(resumed_dir, scheduler=scheduler_name),
+        resume_from=resumed_dir / "last.pt",
+    )
+    resumed_trainer.fit(dataset)
+
+    continuous_state = torch.load(
+        continuous_dir / "last.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    resumed_state = torch.load(
+        resumed_dir / "last.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    for key in (
+        "state_dict",
+        "optimizer_state_dict",
+        "scheduler_state_dict",
+        "scaler_state_dict",
+        "rng_states",
+    ):
+        _assert_nested_state_equal(continuous_state[key], resumed_state[key])
+    assert resumed_state["best_energy_mae"] == pytest.approx(
+        continuous_state["best_energy_mae"]
+    )
+    assert resumed_state["best_force_mae"] == pytest.approx(
+        continuous_state["best_force_mae"]
+    )
+    history = pd.read_csv(resumed_dir / "history.csv")
+    assert history["epoch"].tolist() == [1, 2, 3, 4]
+
+
+def test_resume_rejects_completed_training_checkpoint(tmp_path):
+    dataset = _atomic_dataset(size=4)
+    Trainer(_resume_training_config(tmp_path), logger=NullLogger()).fit(dataset)
+
+    with pytest.raises(ValueError, match="training is already finished"):
+        Trainer(
+            _resume_training_config(tmp_path),
+            logger=NullLogger(),
+            resume_from=tmp_path / "last.pt",
+        ).setup(dataset)
+
+
+def test_training_can_resume_through_multiple_interruptions(tmp_path, monkeypatch):
+    dataset = _atomic_dataset(size=4)
+    original_save_checkpoint = trainer_module.save_checkpoint
+
+    def interrupt_at(target_epoch):
+        def save_then_interrupt(*args, **kwargs):
+            original_save_checkpoint(*args, **kwargs)
+            if kwargs["epoch"] == target_epoch:
+                raise RuntimeError(f"interrupted at epoch {target_epoch}")
+
+        return save_then_interrupt
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", interrupt_at(2))
+    with pytest.raises(RuntimeError, match="epoch 2"):
+        Trainer(_resume_training_config(tmp_path)).fit(dataset)
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", interrupt_at(3))
+    with pytest.raises(RuntimeError, match="epoch 3"):
+        Trainer(
+            _resume_training_config(tmp_path),
+            resume_from=tmp_path / "last.pt",
+        ).fit(dataset)
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", original_save_checkpoint)
+    Trainer(
+        _resume_training_config(tmp_path),
+        resume_from=tmp_path / "last.pt",
+    ).fit(dataset)
+
+    state = torch.load(tmp_path / "last.pt", map_location="cpu", weights_only=True)
+    history = pd.read_csv(tmp_path / "history.csv")
+    assert state["epoch"] == 4
+    assert history["epoch"].tolist() == [1, 2, 3, 4]
+
+
+def test_resume_reuses_fitted_element_refs_without_refitting(tmp_path, monkeypatch):
+    dataset = _atomic_dataset(size=4)
+    original_save_checkpoint = trainer_module.save_checkpoint
+
+    def fitted_config():
+        config = _resume_training_config(tmp_path)
+        config.element_references = replace(config.element_references, source="fit")
+        config.model = replace(config.model, element_refs=None)
+        return config
+
+    def interrupt_after_epoch_one(*args, **kwargs):
+        original_save_checkpoint(*args, **kwargs)
+        if kwargs["epoch"] == 1:
+            raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(trainer_module, "save_checkpoint", interrupt_after_epoch_one)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        Trainer(fitted_config(), logger=NullLogger()).fit(dataset)
+
+    checkpoint = torch.load(
+        tmp_path / "last.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    saved_element_refs = checkpoint["model_config"]["element_refs"]
+    monkeypatch.setattr(
+        trainer_module,
+        "apply_fitted_element_refs",
+        lambda *_args, **_kwargs: pytest.fail("element_refs were unexpectedly refitted"),
+    )
+
+    resumed = Trainer(
+        fitted_config(),
+        logger=NullLogger(),
+        resume_from=tmp_path / "last.pt",
+    )
+    resumed.setup(dataset)
+
+    assert resumed.config.model.element_refs == saved_element_refs
+    assert resumed.start_epoch == 2
+
+
+def test_resume_rejects_inference_checkpoint(tmp_path):
+    dataset = _atomic_dataset(size=4)
+    Trainer(_resume_training_config(tmp_path), logger=NullLogger()).fit(dataset)
+
+    with pytest.raises(ValueError, match="cannot resume training"):
+        Trainer(
+            _resume_training_config(tmp_path),
+            logger=NullLogger(),
+            resume_from=tmp_path / "bestF.pt",
+        ).setup(dataset)
+
+
+def test_resume_reports_all_incompatible_configuration_fields(tmp_path):
+    dataset = _atomic_dataset(size=4)
+    Trainer(_resume_training_config(tmp_path), logger=NullLogger()).fit(dataset)
+    mismatched = _resume_training_config(tmp_path)
+    mismatched.training = replace(
+        mismatched.training,
+        epochs=5,
+        batch_size=2,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        Trainer(
+            mismatched,
+            logger=NullLogger(),
+            resume_from=tmp_path / "last.pt",
+        ).setup(dataset)
+
+    message = str(exc_info.value)
+    assert "training.epochs" in message
+    assert "training.batch_size" in message
+
+    with pytest.raises(ValueError, match="data_state"):
+        Trainer(
+            _resume_training_config(tmp_path),
+            logger=NullLogger(),
+            resume_from=tmp_path / "last.pt",
+        ).setup(_atomic_dataset(size=5))
+
+    mismatched_refs = _resume_training_config(tmp_path)
+    mismatched_refs.element_references = replace(
+        mismatched_refs.element_references,
+        source="fit",
+    )
+    mismatched_refs.model = replace(mismatched_refs.model, element_refs=None)
+    with pytest.raises(ValueError, match="element_references"):
+        Trainer(
+            mismatched_refs,
+            logger=NullLogger(),
+            resume_from=tmp_path / "last.pt",
+        ).setup(dataset)
+
+
 def test_evaluate_test_set_restores_in_memory_model_state(tmp_path):
     raw_config = _raw_config()
     raw_config["training"]["output_dir"] = str(tmp_path)
@@ -912,6 +1136,45 @@ def test_csv_logger_writes_evaluation_records(tmp_path):
     assert metrics["split"] == "test"
     assert metrics["checkpoint"] == "bestF.pt"
     assert metrics["force_mae"] == pytest.approx(0.2)
+
+
+def test_resume_history_truncates_epochs_newer_than_checkpoint(tmp_path):
+    logger = CSVLogger(tmp_path)
+    for epoch in (1, 2, 3):
+        logger.log_epoch(_epoch_record(epoch=epoch))
+
+    reconcile_history_for_resume(tmp_path / "history.csv", saved_epoch=2)
+
+    history = pd.read_csv(tmp_path / "history.csv")
+    assert history["epoch"].tolist() == [1, 2]
+
+
+def test_resume_history_warns_about_missing_rows_without_fabricating_them(tmp_path):
+    CSVLogger(tmp_path).log_epoch(_epoch_record(epoch=1))
+
+    with pytest.warns(RuntimeWarning, match="will not be backfilled"):
+        reconcile_history_for_resume(tmp_path / "history.csv", saved_epoch=3)
+
+    history = pd.read_csv(tmp_path / "history.csv")
+    assert history["epoch"].tolist() == [1]
+
+
+def test_resume_history_rejects_duplicate_epochs(tmp_path):
+    logger = CSVLogger(tmp_path)
+    logger.log_epoch(_epoch_record(epoch=1))
+    logger.log_epoch(_epoch_record(epoch=1))
+
+    with pytest.raises(ValueError, match="strictly increasing"):
+        reconcile_history_for_resume(tmp_path / "history.csv", saved_epoch=1)
+
+
+def test_resume_history_recreates_missing_file(tmp_path):
+    with pytest.warns(RuntimeWarning, match="Training history is missing"):
+        reconcile_history_for_resume(tmp_path / "history.csv", saved_epoch=2)
+
+    history = pd.read_csv(tmp_path / "history.csv")
+    assert history.empty
+    assert tuple(history.columns) == HISTORY_FIELDS
 
 
 def test_console_logger_prints_epoch_summary(capsys):
@@ -1021,6 +1284,65 @@ def test_cleanup_distributed_keeps_externally_owned_process_group(monkeypatch):
     assert destroyed == []
 
 
+def test_gather_object_to_main_collects_rank_ordered_states(monkeypatch):
+    context = DistributedContext(enabled=True, rank=0, world_size=2, device="cpu")
+
+    def fake_gather_object(value, output, *, dst):
+        assert dst == 0
+        output[0] = value
+        output[1] = {"rank": 1}
+
+    monkeypatch.setattr(distributed_module.dist, "gather_object", fake_gather_object)
+
+    gathered = gather_object_to_main({"rank": 0}, context)
+
+    assert gathered == [{"rank": 0}, {"rank": 1}]
+
+
+def test_gather_object_to_main_with_real_gloo_process_group(tmp_path):
+    init_path = tmp_path / "gloo-init"
+    result_path = tmp_path / "gathered.pt"
+
+    torch.multiprocessing.spawn(
+        _gather_rng_state_process,
+        args=(str(init_path), str(result_path)),
+        nprocs=2,
+        join=True,
+    )
+
+    gathered = torch.load(result_path, map_location="cpu", weights_only=True)
+    assert [state["rank"] for state in gathered] == [0, 1]
+    assert all("torch_cpu" in state["rng"] for state in gathered)
+
+
+def test_local_rng_and_dataloader_generator_states_roundtrip():
+    random.seed(11)
+    np.random.seed(12)
+    torch.manual_seed(13)
+    generators = create_data_loader_generators(14)
+    state = capture_local_rng_state(generators, device="cpu")
+
+    expected = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1),
+        {name: torch.rand(1, generator=generator) for name, generator in generators.items()},
+    )
+    restore_local_rng_state(state, generators, device="cpu")
+    actual = (
+        random.random(),
+        np.random.random(),
+        torch.rand(1),
+        {name: torch.rand(1, generator=generator) for name, generator in generators.items()},
+    )
+
+    assert actual[0] == expected[0]
+    assert actual[1] == expected[1]
+    assert torch.equal(actual[2], expected[2])
+    for name in generators:
+        assert torch.equal(actual[3][name], expected[3][name])
+
+
 def test_barrier_passes_cuda_device_ids(monkeypatch):
     calls = []
 
@@ -1100,20 +1422,29 @@ def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():
 def test_save_checkpoint_writes_separate_model_config(tmp_path):
     config = TrainingConfig.from_dict(_raw_config())
     model = torch.nn.Linear(1, 1)
+    optimizer, scheduler, scaler, rng_states = _checkpoint_training_state(model)
 
     save_checkpoint(
         tmp_path,
         model,
+        optimizer,
+        scheduler,
+        scaler,
         config,
         epoch=1,
         best_energy_mae=0.1,
         best_force_mae=0.2,
         is_best_energy=True,
         is_best_force=True,
+        rng_states=rng_states,
+        world_size=1,
+        data_state=_test_data_state(),
     )
 
-    state = torch.load(tmp_path / "last.pt", map_location="cpu")
+    state = torch.load(tmp_path / "last.pt", map_location="cpu", weights_only=True)
 
+    assert state["checkpoint_type"] == TRAINING_CHECKPOINT_TYPE
+    assert state["checkpoint_version"] == 1
     assert state["model_name"] == "GPTFF"
     assert state["best_energy_mae"] == pytest.approx(0.1)
     assert state["best_force_mae"] == pytest.approx(0.2)
@@ -1136,28 +1467,41 @@ def test_save_checkpoint_writes_separate_model_config(tmp_path):
     assert state["training_config"]["data"]["graph_cache_size"] == 16
     assert state["training_config"]["loss"]["stress_loss_weight"] == pytest.approx(1.0)
     assert "label_config" not in state
-    assert "optimizer" not in state
-    assert "scheduler" not in state
-    assert "scaler" not in state
-    assert "random_state" not in state
+    assert "optimizer_state_dict" in state
+    assert state["scheduler_state_dict"] is None
+    assert "scaler_state_dict" in state
+    assert state["amp_scaler_enabled"] is False
+    assert len(state["rng_states"]) == 1
+    assert state["world_size"] == 1
+    assert state["data_state"] == _test_data_state()
     assert "device" not in state["model_config"]
     assert (tmp_path / "bestE.pt").exists()
     assert (tmp_path / "bestF.pt").exists()
+    best_state = torch.load(tmp_path / "bestF.pt", map_location="cpu", weights_only=True)
+    assert best_state["checkpoint_type"] == INFERENCE_CHECKPOINT_TYPE
+    assert "optimizer_state_dict" not in best_state
 
 
 def test_save_checkpoint_updates_best_energy_and_force_independently(tmp_path):
     config = TrainingConfig.from_dict(_raw_config())
     model = torch.nn.Linear(1, 1)
+    optimizer, scheduler, scaler, rng_states = _checkpoint_training_state(model)
 
     save_checkpoint(
         tmp_path,
         model,
+        optimizer,
+        scheduler,
+        scaler,
         config,
         epoch=1,
         best_energy_mae=0.1,
         best_force_mae=0.2,
         is_best_energy=True,
         is_best_force=False,
+        rng_states=rng_states,
+        world_size=1,
+        data_state=_test_data_state(),
     )
     assert (tmp_path / "bestE.pt").exists()
     assert not (tmp_path / "bestF.pt").exists()
@@ -1165,19 +1509,79 @@ def test_save_checkpoint_updates_best_energy_and_force_independently(tmp_path):
     save_checkpoint(
         tmp_path,
         model,
+        optimizer,
+        scheduler,
+        scaler,
         config,
         epoch=2,
         best_energy_mae=0.1,
         best_force_mae=0.15,
         is_best_energy=False,
         is_best_force=True,
+        rng_states=rng_states,
+        world_size=1,
+        data_state=_test_data_state(),
     )
     assert (tmp_path / "bestE.pt").exists()
     assert (tmp_path / "bestF.pt").exists()
 
-    best_force_state = torch.load(tmp_path / "bestF.pt", map_location="cpu")
+    best_force_state = torch.load(
+        tmp_path / "bestF.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
     assert best_force_state["epoch"] == 2
     assert best_force_state["best_force_mae"] == pytest.approx(0.15)
+
+
+def test_atomic_checkpoint_failure_preserves_previous_last_checkpoint(tmp_path, monkeypatch):
+    config = TrainingConfig.from_dict(_raw_config())
+    model = torch.nn.Linear(1, 1)
+    optimizer, scheduler, scaler, rng_states = _checkpoint_training_state(model)
+    save_checkpoint(
+        tmp_path,
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        config,
+        epoch=1,
+        best_energy_mae=0.1,
+        best_force_mae=0.2,
+        is_best_energy=False,
+        is_best_force=False,
+        rng_states=rng_states,
+        world_size=1,
+        data_state=_test_data_state(),
+    )
+
+    monkeypatch.setattr(
+        checkpoint_module.torch,
+        "save",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        save_checkpoint(
+            tmp_path,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            config,
+            epoch=2,
+            best_energy_mae=0.1,
+            best_force_mae=0.2,
+            is_best_energy=False,
+            is_best_force=False,
+            rng_states=rng_states,
+            world_size=1,
+            data_state=_test_data_state(),
+        )
+
+    state = torch.load(tmp_path / "last.pt", map_location="cpu", weights_only=True)
+    assert state["epoch"] == 1
+    assert list(tmp_path.glob(".last.pt.tmp.*")) == []
 
 
 def test_compute_batch_loss_requires_energy_and_force_batches():
@@ -1385,6 +1789,87 @@ def _batch_loss(value):
         stress_mae=None,
         batch_size=1,
     )
+
+
+def _checkpoint_training_state(model):
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+    rng_state = capture_local_rng_state(
+        create_data_loader_generators(42),
+        device="cpu",
+    )
+    return optimizer, None, scaler, [rng_state]
+
+
+def _gather_rng_state_process(rank, init_path, result_path):
+    torch.distributed.init_process_group(
+        "gloo",
+        init_method=f"file://{init_path}",
+        rank=rank,
+        world_size=2,
+    )
+    try:
+        context = DistributedContext(
+            enabled=True,
+            rank=rank,
+            local_rank=rank,
+            world_size=2,
+            device="cpu",
+        )
+        local_state = {
+            "rank": rank,
+            "rng": capture_local_rng_state(
+                create_data_loader_generators(42 + rank),
+                device="cpu",
+            ),
+        }
+        gathered = gather_object_to_main(local_state, context)
+        if rank == 0:
+            torch.save(gathered, result_path)
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+def _test_data_state():
+    return {
+        "train_samples": 1,
+        "validation_samples": 1,
+        "test_samples": None,
+        "train_batches": 1,
+        "validation_batches": 1,
+        "test_batches": None,
+    }
+
+
+def _resume_training_config(output_dir, *, scheduler="CosLR"):
+    raw_config = _raw_config()
+    raw_config["training"]["output_dir"] = str(output_dir)
+    raw_config["training"]["epochs"] = 4
+    raw_config["training"]["batch_size"] = 1
+    raw_config["training"]["stress_loss_weight"] = 0.0
+    raw_config["training"]["scheduler"] = scheduler
+    raw_config["data"]["validation_fraction"] = 0.25
+    raw_config["data"]["cache_graphs"] = False
+    raw_config["data"]["graph_cache_size"] = None
+    raw_config["logging"] = {"wandb": {"enabled": False}}
+    return TrainingConfig.from_dict(raw_config)
+
+
+def _assert_nested_state_equal(first, second):
+    if isinstance(first, torch.Tensor):
+        assert torch.equal(first, second)
+        return
+    if isinstance(first, dict):
+        assert first.keys() == second.keys()
+        for key in first:
+            _assert_nested_state_equal(first[key], second[key])
+        return
+    if isinstance(first, list | tuple):
+        assert len(first) == len(second)
+        for first_item, second_item in zip(first, second):
+            _assert_nested_state_equal(first_item, second_item)
+        return
+    assert first == second
 
 
 def _metrics_record():
