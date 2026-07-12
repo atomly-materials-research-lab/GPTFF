@@ -294,7 +294,7 @@ def test_sharded_graph_dataset_training_loader_entrypoint(tmp_path):
     loaders = build_loaders(
         config,
         splits,
-        generators=create_data_loader_generators(config.seed),
+        generators=create_data_loader_generators(config.training.seed),
     )
     batch = next(iter(loaders.train))
 
@@ -345,7 +345,7 @@ def test_build_loaders_respects_persistent_workers_config(tmp_path):
     loaders = build_loaders(
         config,
         splits,
-        generators=create_data_loader_generators(config.seed),
+        generators=create_data_loader_generators(config.training.seed),
     )
 
     assert loaders.train.persistent_workers is True
@@ -385,7 +385,7 @@ def test_build_loaders_uses_distributed_samplers_without_eval_padding(tmp_path):
     loaders = build_loaders(
         config,
         splits,
-        generators=create_data_loader_generators(config.seed),
+        generators=create_data_loader_generators(config.training.seed),
         distributed=context,
     )
 

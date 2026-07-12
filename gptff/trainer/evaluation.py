@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from gptff.trainer._utils import format_value
+
 
 @dataclass(frozen=True)
 class EvaluationRecord:
@@ -63,16 +65,10 @@ def format_evaluation_record(record: EvaluationRecord) -> str:
     return (
         f"{record.split} "
         f"checkpoint={record.checkpoint or 'current'} "
-        f"MAE(e)={_format_value(record.energy_mae, 5)} "
-        f"MAE(f)={_format_value(record.force_mae, 5)} "
-        f"MAE(s)={_format_value(record.stress_mae, 3)}"
+        f"MAE(e)={format_value(record.energy_mae, 5)} "
+        f"MAE(f)={format_value(record.force_mae, 5)} "
+        f"MAE(s)={format_value(record.stress_mae, 3)}"
     )
-
-
-def _format_value(value: float, precision: int) -> str:
-    if math.isnan(value):
-        return "n/a"
-    return f"{value:.{precision}f}"
 
 
 def _json_safe(value: Any) -> Any:

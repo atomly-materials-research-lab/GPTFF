@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from gptff.model import GPTFFConfig
+from gptff.trainer._utils import normalize_distributed_mode
 
 
 @dataclass(frozen=True)
@@ -42,9 +43,15 @@ class DataConfig:
 class OptimizerConfig:
     learning_rate: float
     name: str = "AdamW"
-    weight_decay: float = 1e-2
+    weight_decay: float | None = None
     scheduler: str = "CosLR"
     scheduler_params: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        weight_decay = self.weight_decay
+        if weight_decay is None:
+            weight_decay = 1e-2 if self.name.lower() == "adamw" else 0.0
+        object.__setattr__(self, "weight_decay", float(weight_decay))
 
 
 @dataclass(frozen=True)
@@ -62,7 +69,7 @@ class TrainingLoopConfig:
     distributed: str = "auto"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "distributed", _distributed_mode(self.distributed))
+        object.__setattr__(self, "distributed", normalize_distributed_mode(self.distributed))
         if not math.isfinite(self.grad_clip_norm) or self.grad_clip_norm < 0:
             raise ValueError("grad_clip_norm must be finite and non-negative.")
 
@@ -183,7 +190,6 @@ class TrainingConfig:
         loss = raw_config.get("loss", training)
         epochs = int(_config_value(training, "epochs", "epochs"))
         optimizer_name = str(optimizer.get("name", optimizer.get("optimizer", "AdamW")))
-        default_weight_decay = 1e-2 if optimizer_name.lower() == "adamw" else 0.0
         config_base_dir = None if base_dir is None else Path(base_dir)
 
         element_references = ElementReferenceConfig.from_dict(
@@ -211,7 +217,7 @@ class TrainingConfig:
             optimizer=OptimizerConfig(
                 name=optimizer_name,
                 learning_rate=float(_config_value(optimizer, "learning_rate", "lr")),
-                weight_decay=float(optimizer.get("weight_decay", default_weight_decay)),
+                weight_decay=optimizer.get("weight_decay"),
                 scheduler=str(optimizer.get("scheduler", "CosLR")),
                 scheduler_params=_scheduler_params(optimizer),
             ),
@@ -226,7 +232,7 @@ class TrainingConfig:
                 grad_clip_norm=float(training.get("grad_clip_norm", 10.0)),
                 seed=int(training.get("seed", 42)),
                 deterministic=bool(training.get("deterministic", True)),
-                distributed=_distributed_mode(training.get("distributed", "auto")),
+                distributed=training.get("distributed", "auto"),
             ),
             loss=LossConfig(
                 energy_loss_weight=float(
@@ -251,209 +257,6 @@ class TrainingConfig:
             "element_references": asdict(self.element_references),
             "logging": asdict(self.logging),
         }
-
-    def to_model_config(self) -> GPTFFConfig:
-        return self.model
-
-    @property
-    def dataset_path(self) -> str | None:
-        return self.data.dataset_path
-
-    @property
-    def dataset_format(self) -> str:
-        return self.data.dataset_format
-
-    @property
-    def validation_fraction(self) -> float:
-        return self.data.validation_fraction
-
-    @property
-    def test_fraction(self) -> float:
-        return self.data.test_fraction
-
-    @property
-    def split_seed(self) -> int:
-        return self.data.split_seed
-
-    @property
-    def group_by_material(self) -> bool:
-        return self.data.group_by_material
-
-    @property
-    def cache_graphs(self) -> bool:
-        return self.data.cache_graphs
-
-    @property
-    def graph_cache_size(self) -> int | None:
-        return self.data.graph_cache_size
-
-    @property
-    def lr(self) -> float:
-        return self.optimizer.learning_rate
-
-    @property
-    def weight_decay(self) -> float:
-        return self.optimizer.weight_decay
-
-    @property
-    def optimizer_name(self) -> str:
-        return self.optimizer.name
-
-    @property
-    def scheduler(self) -> str:
-        return self.optimizer.scheduler
-
-    @property
-    def scheduler_params(self) -> dict[str, Any]:
-        return dict(self.optimizer.scheduler_params)
-
-    @property
-    def epochs(self) -> int:
-        return self.training.epochs
-
-    @property
-    def batch_size(self) -> int:
-        return self.training.batch_size
-
-    @property
-    def num_workers(self) -> int:
-        return self.training.num_workers
-
-    @property
-    def persistent_workers(self) -> bool:
-        return self.training.persistent_workers
-
-    @property
-    def device(self) -> str:
-        return self.training.device
-
-    @device.setter
-    def device(self, value: str) -> None:
-        self.training = replace(self.training, device=value)
-
-    @property
-    def amp(self) -> bool:
-        return self.training.amp
-
-    @amp.setter
-    def amp(self, value: bool) -> None:
-        self.training = replace(self.training, amp=bool(value))
-
-    @property
-    def output_dir(self) -> str:
-        return self.training.output_dir
-
-    @property
-    def grad_clip_norm(self) -> float:
-        return self.training.grad_clip_norm
-
-    @property
-    def seed(self) -> int:
-        return self.training.seed
-
-    @property
-    def deterministic(self) -> bool:
-        return self.training.deterministic
-
-    @property
-    def distributed(self) -> str:
-        return self.training.distributed
-
-    @property
-    def energy_loss_weight(self) -> float:
-        return self.loss.energy_loss_weight
-
-    @energy_loss_weight.setter
-    def energy_loss_weight(self, value: float) -> None:
-        self.loss = replace(self.loss, energy_loss_weight=float(value))
-
-    @property
-    def force_loss_weight(self) -> float:
-        return self.loss.force_loss_weight
-
-    @force_loss_weight.setter
-    def force_loss_weight(self, value: float) -> None:
-        self.loss = replace(self.loss, force_loss_weight=float(value))
-
-    @property
-    def stress_loss_weight(self) -> float:
-        return self.loss.stress_loss_weight
-
-    @stress_loss_weight.setter
-    def stress_loss_weight(self, value: float) -> None:
-        self.loss = replace(self.loss, stress_loss_weight=float(value))
-
-    @property
-    def atom_feature_dim(self) -> int:
-        return self.model.atom_feature_dim
-
-    @property
-    def edge_feature_dim(self) -> int:
-        return self.model.edge_feature_dim
-
-    @property
-    def num_interaction_blocks(self) -> int:
-        return self.model.num_interaction_blocks
-
-    @property
-    def num_radial(self) -> int:
-        return self.model.num_radial
-
-    @property
-    def num_angular(self) -> int:
-        return self.model.num_angular
-
-    @property
-    def radial_cutoff(self) -> float:
-        return self.model.radial_cutoff
-
-    @property
-    def angle_cutoff(self) -> float:
-        return self.model.angle_cutoff
-
-    @property
-    def cutoff_coeff(self) -> int:
-        return self.model.cutoff_coeff
-
-    @property
-    def max_atomic_number(self) -> int:
-        return self.model.max_atomic_number
-
-    @property
-    def element_refs(self) -> Any:
-        return self.model.element_refs
-
-    @element_refs.setter
-    def element_refs(self, value: Any) -> None:
-        self.model = replace(self.model, element_refs=value)
-
-    @property
-    def num_readout_layers(self) -> int:
-        return self.model.num_readout_layers
-
-    @property
-    def readout_atom_norm(self) -> bool:
-        return self.model.readout_atom_norm
-
-    @property
-    def interaction_dropout(self) -> float:
-        return self.model.interaction_dropout
-
-    @property
-    def node_feature_len(self) -> int:
-        return self.atom_feature_dim
-
-    @property
-    def edge_feature_len(self) -> int:
-        return self.edge_feature_dim
-
-    @property
-    def n_layers(self) -> int:
-        return self.num_interaction_blocks
-
-    @property
-    def n_readout_layers(self) -> int:
-        return self.num_readout_layers
 
 
 def load_config(config_file: str | Path) -> TrainingConfig:
@@ -531,15 +334,6 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
-
-
-def _distributed_mode(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    normalized = str(value).strip().lower()
-    if normalized in {"auto", "true", "false"}:
-        return normalized
-    raise ValueError("training.distributed must be one of: auto, true, false.")
 
 
 def _optional_str(value: Any) -> str | None:

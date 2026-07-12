@@ -8,6 +8,8 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
+from gptff.trainer._utils import normalize_distributed_mode
+
 
 @dataclass(frozen=True)
 class DistributedContext:
@@ -62,15 +64,6 @@ def initialize_distributed(mode: str | bool, *, requested_device: str) -> Distri
         device=device,
         owns_process_group=owns_process_group,
     )
-
-
-def normalize_distributed_mode(mode: str | bool) -> str:
-    if isinstance(mode, bool):
-        return "true" if mode else "false"
-    normalized = str(mode).strip().lower()
-    if normalized in {"auto", "true", "false"}:
-        return normalized
-    raise ValueError("training.distributed must be one of: auto, true, false.")
 
 
 def wrap_distributed_model(

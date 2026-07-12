@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gc
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
@@ -111,8 +111,8 @@ def _meter_avg_or_inf(meter: AverageMeter) -> float:
 
 
 def build_model(config: TrainingConfig) -> torch.nn.Module:
-    model = GPTFF(config.to_model_config())
-    return model.to(config.device)
+    model = GPTFF(config.model)
+    return model.to(config.training.device)
 
 
 def count_parameters(model: torch.nn.Module) -> int:
@@ -161,17 +161,17 @@ def _exclude_from_weight_decay(name: str, param: torch.nn.Parameter) -> bool:
 
 
 def build_optimizer(model: torch.nn.Module, config: TrainingConfig) -> optim.Optimizer:
-    optimizer_name = config.optimizer_name.lower()
-    param_groups = build_weight_decay_param_groups(model, config.weight_decay)
+    optimizer_name = config.optimizer.name.lower()
+    param_groups = build_weight_decay_param_groups(model, config.optimizer.weight_decay)
     if optimizer_name == "adam":
-        return optim.Adam(param_groups, config.lr)
+        return optim.Adam(param_groups, config.optimizer.learning_rate)
     if optimizer_name == "adamw":
-        return optim.AdamW(param_groups, config.lr)
+        return optim.AdamW(param_groups, config.optimizer.learning_rate)
     if optimizer_name == "radam":
-        return optim.RAdam(param_groups, config.lr)
+        return optim.RAdam(param_groups, config.optimizer.learning_rate)
     if optimizer_name == "sgd":
-        return optim.SGD(param_groups, config.lr, momentum=0.9)
-    raise ValueError(f"Unsupported optimizer: {config.optimizer_name}")
+        return optim.SGD(param_groups, config.optimizer.learning_rate, momentum=0.9)
+    raise ValueError(f"Unsupported optimizer: {config.optimizer.name}")
 
 
 def build_scheduler(
@@ -180,16 +180,16 @@ def build_scheduler(
     *,
     num_batches: int,
 ) -> Scheduler | None:
-    scheduler_params = config.scheduler_params
+    scheduler_params = dict(config.optimizer.scheduler_params)
     scheduler_params["steps_per_epoch"] = effective_scheduler_steps_per_epoch(
         num_batches,
         scheduler_params,
     )
     return build_lr_scheduler(
         optimizer,
-        scheduler=config.scheduler,
-        learning_rate=config.lr,
-        epochs=config.epochs,
+        scheduler=config.optimizer.scheduler,
+        learning_rate=config.optimizer.learning_rate,
+        epochs=config.training.epochs,
         scheduler_params=scheduler_params,
     )
 
@@ -217,11 +217,11 @@ def effective_scheduler_steps_per_epoch(
 
 
 def use_cuda_amp(config: TrainingConfig) -> bool:
-    return bool(config.amp) and torch.device(config.device).type == "cuda"
+    return bool(config.training.amp) and torch.device(config.training.device).type == "cuda"
 
 
 def use_non_blocking_transfer(config: TrainingConfig) -> bool:
-    return torch.device(config.device).type == "cuda"
+    return torch.device(config.training.device).type == "cuda"
 
 
 def has_nonfinite_loss(batch_loss: BatchLoss) -> bool:
@@ -335,7 +335,7 @@ def train_one_epoch(
     show_progress: bool = True,
     distributed: DistributedContext | None = None,
 ) -> EpochMetrics:
-    distributed = distributed or DistributedContext.disabled(device=config.device)
+    distributed = distributed or DistributedContext.disabled(device=config.training.device)
     model.train()
     metrics = EpochMetrics.create()
     scheduler_batches = (
@@ -343,7 +343,7 @@ def train_one_epoch(
             len(train_loader),
             steps_per_epoch=effective_scheduler_steps_per_epoch(
                 len(train_loader),
-                config.scheduler_params,
+                config.optimizer.scheduler_params,
             ),
         )
         if scheduler is not None
@@ -357,7 +357,7 @@ def train_one_epoch(
     )
     for batch_idx, batch in enumerate(progress, start=1):
         batch = batch.to(
-            config.device,
+            config.training.device,
             non_blocking=use_non_blocking_transfer(config),
         )
 
@@ -370,7 +370,11 @@ def train_one_epoch(
                 create_graph=True,
             )
 
-        if should_skip_optimizer_step(batch_loss, distributed, device=config.device):
+        if should_skip_optimizer_step(
+            batch_loss,
+            distributed,
+            device=config.training.device,
+        ):
             metrics.skipped_batches += 1
             progress.set_postfix(skipped=metrics.skipped_batches, refresh=False)
             # Keep the LR schedule aligned with successful parameter updates.
@@ -379,7 +383,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(batch_loss.loss).backward()
         scaler.unscale_(optimizer)
-        clip_gradients(model, config.grad_clip_norm)
+        clip_gradients(model, config.training.grad_clip_norm)
         scaler.step(optimizer)
         scaler.update()
         if scheduler is not None and batch_idx in scheduler_batches:
@@ -412,7 +416,7 @@ def validate(
     )
     for batch in progress:
         batch = batch.to(
-            config.device,
+            config.training.device,
             non_blocking=use_non_blocking_transfer(config),
         )
 
@@ -468,13 +472,13 @@ def build_epoch_log_record(
 class Trainer:
     def __init__(self, config: TrainingConfig, logger: TrainingLogger | None = None):
         self.config = config
-        self.output_dir = Path(config.output_dir)
+        self.output_dir = Path(config.training.output_dir)
         self.criterion: nn.Module = nn.HuberLoss()
         self.model: torch.nn.Module | None = None
         self.optimizer: optim.Optimizer | None = None
         self.scheduler: Scheduler | None = None
         self.scaler: GradScaler | None = None
-        self.distributed = DistributedContext.disabled(device=config.device)
+        self.distributed = DistributedContext.disabled(device=config.training.device)
         self.train_loader = None
         self.val_loader = None
         self.test_loader = None
@@ -486,13 +490,19 @@ class Trainer:
 
     def setup(self, dataset: AtomicDataset | None = None) -> None:
         self.distributed = initialize_distributed(
-            self.config.distributed,
-            requested_device=self.config.device,
+            self.config.training.distributed,
+            requested_device=self.config.training.device,
         )
         if self.distributed.device is not None:
-            self.config.device = self.distributed.device
-        configure_reproducibility(self.config.seed, self.config.deterministic)
-        self.data_loader_generators = create_data_loader_generators(self.config.seed)
+            self.config.training = replace(
+                self.config.training,
+                device=self.distributed.device,
+            )
+        configure_reproducibility(
+            self.config.training.seed,
+            self.config.training.deterministic,
+        )
+        self.data_loader_generators = create_data_loader_generators(self.config.training.seed)
         if self.distributed.is_main_process:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         barrier(self.distributed)
@@ -568,14 +578,14 @@ class Trainer:
             self.scheduler,
             self.scaler,
             self.config,
-            progress_description=f"Train {epoch}/{self.config.epochs}",
+            progress_description=f"Train {epoch}/{self.config.training.epochs}",
             show_progress=self.distributed.is_main_process,
             distributed=self.distributed,
         )
         return sync_epoch_metrics(
             metrics,
             self.distributed,
-            device=self.config.device,
+            device=self.config.training.device,
             skipped_reduce="max",
         )
 
@@ -585,10 +595,14 @@ class Trainer:
             unwrap_model(self.model),
             self.criterion,
             self.config,
-            progress_description=f"Validation {epoch}/{self.config.epochs}",
+            progress_description=f"Validation {epoch}/{self.config.training.epochs}",
             show_progress=self.distributed.is_main_process,
         )
-        return sync_epoch_metrics(metrics, self.distributed, device=self.config.device)
+        return sync_epoch_metrics(
+            metrics,
+            self.distributed,
+            device=self.config.training.device,
+        )
 
     def test(self, *, progress_description: str = "Test") -> EpochMetrics | None:
         if self.test_loader is None:
@@ -601,7 +615,11 @@ class Trainer:
             progress_description=progress_description,
             show_progress=self.distributed.is_main_process,
         )
-        return sync_epoch_metrics(metrics, self.distributed, device=self.config.device)
+        return sync_epoch_metrics(
+            metrics,
+            self.distributed,
+            device=self.config.training.device,
+        )
 
     def evaluate_test_set(
         self,
@@ -621,7 +639,10 @@ class Trainer:
 
         try:
             if checkpoint_path.exists():
-                state = torch.load(checkpoint_path, map_location=torch.device(self.config.device))
+                state = torch.load(
+                    checkpoint_path,
+                    map_location=torch.device(self.config.training.device),
+                )
                 raw_model.load_state_dict(state["state_dict"])
                 checkpoint_name = checkpoint_filename
                 checkpoint_epoch = int(state["epoch"]) if "epoch" in state else None
@@ -651,10 +672,12 @@ class Trainer:
     def fit(self, dataset: AtomicDataset | None = None) -> float:
         try:
             self.setup(dataset)
-            for epoch in range(self.config.epochs):
+            for epoch in range(self.config.training.epochs):
                 lr = optimizer_lr(self.optimizer)
                 current_epoch = epoch + 1
-                self._print(f"Epoch: [{current_epoch}/{self.config.epochs}], lr: {lr:.4e}")
+                self._print(
+                    f"Epoch: [{current_epoch}/{self.config.training.epochs}], lr: {lr:.4e}"
+                )
 
                 train_metrics = self.train_epoch(current_epoch)
                 val_metrics = self.validate(current_epoch)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -38,41 +38,41 @@ class DataLoaders:
 
 
 def load_atomic_dataset(config: TrainingConfig) -> AtomicDataset:
-    if config.dataset_path is None:
+    if config.data.dataset_path is None:
         raise ValueError(
             "data.dataset_path is required when Trainer.fit() is called without an AtomicDataset."
         )
-    return AtomicDataset.from_file(config.dataset_path)
+    return AtomicDataset.from_file(config.data.dataset_path)
 
 
 def load_training_dataset(config: TrainingConfig) -> AtomicDataset | ShardedGraphDataset:
-    if config.dataset_path is None:
+    if config.data.dataset_path is None:
         raise ValueError(
             "data.dataset_path is required when Trainer.fit() is called without a dataset."
         )
-    if config.dataset_format == "atomic_json":
-        return AtomicDataset.from_file(config.dataset_path)
-    if config.dataset_format == "sharded_hdf5_graph":
-        dataset = ShardedGraphDataset(config.dataset_path)
+    if config.data.dataset_format == "atomic_json":
+        return AtomicDataset.from_file(config.data.dataset_path)
+    if config.data.dataset_format == "sharded_hdf5_graph":
+        dataset = ShardedGraphDataset(config.data.dataset_path)
         _validate_sharded_dataset_cutoffs(dataset, config)
         return dataset
-    raise ValueError(f"Unsupported data.dataset_format: {config.dataset_format!r}")
+    raise ValueError(f"Unsupported data.dataset_format: {config.data.dataset_format!r}")
 
 
 def build_graph_datasets(
     dataset: AtomicDataset | ShardedGraphDataset,
     config: TrainingConfig,
 ) -> GraphDatasetSplits:
-    _validate_training_labels(dataset, require_stress=config.stress_loss_weight > 0.0)
+    _validate_training_labels(dataset, require_stress=config.loss.stress_loss_weight > 0.0)
     if isinstance(dataset, ShardedGraphDataset):
         return _build_sharded_graph_datasets(dataset, config)
 
     split = split_atomic_dataset(
         dataset,
-        validation_fraction=config.validation_fraction,
-        test_fraction=config.test_fraction,
-        seed=config.split_seed,
-        group_by_material=config.group_by_material,
+        validation_fraction=config.data.validation_fraction,
+        test_fraction=config.data.test_fraction,
+        seed=config.data.split_seed,
+        group_by_material=config.data.group_by_material,
     )
 
     train = _build_graph_dataset(
@@ -101,13 +101,13 @@ def _build_sharded_graph_datasets(
     config: TrainingConfig,
 ) -> GraphDatasetSplits:
     material_ids = None
-    if config.group_by_material:
+    if config.data.group_by_material:
         material_ids = [record.material_id for record in dataset.records]
     split = split_dataset_indices(
         len(dataset),
-        validation_fraction=config.validation_fraction,
-        test_fraction=config.test_fraction,
-        seed=config.split_seed,
+        validation_fraction=config.data.validation_fraction,
+        test_fraction=config.data.test_fraction,
+        seed=config.data.split_seed,
         material_ids=material_ids,
     )
     return GraphDatasetSplits(
@@ -120,16 +120,19 @@ def _build_sharded_graph_datasets(
 def apply_fitted_element_refs(config: TrainingConfig, dataset, *, verbose: bool = True) -> None:
     if not config.element_references.fit_from_training_data:
         return
-    if config.element_refs is not None:
+    if config.model.element_refs is not None:
         raise ValueError(
             "element_references.source='fit' cannot be combined with preloaded element refs."
         )
     if verbose:
         print("Fitting element_refs from the full dataset.")
     samples = dataset.element_ref_records() if hasattr(dataset, "element_ref_records") else dataset
-    config.element_refs = fit_element_refs_from_samples(
-        samples,
-        max_atomic_number=config.max_atomic_number,
+    config.model = replace(
+        config.model,
+        element_refs=fit_element_refs_from_samples(
+            samples,
+            max_atomic_number=config.model.max_atomic_number,
+        ),
     )
 
 
@@ -141,16 +144,16 @@ def build_loaders(
     distributed=None,
 ) -> DataLoaders:
     distributed = distributed or _NoDistributedContext()
-    pin_memory = torch.device(config.device).type == "cuda"
+    pin_memory = torch.device(config.training.device).type == "cuda"
     common = {
-        "batch_size": config.batch_size,
-        "num_workers": config.num_workers,
+        "batch_size": config.training.batch_size,
+        "num_workers": config.training.num_workers,
         "collate_fn": collate_graph_samples,
         "pin_memory": pin_memory,
         "worker_init_fn": seed_data_loader_worker,
     }
-    if config.num_workers > 0:
-        common["persistent_workers"] = config.persistent_workers
+    if config.training.num_workers > 0:
+        common["persistent_workers"] = config.training.persistent_workers
         common["prefetch_factor"] = 2
     train_sampler = None
     if distributed.enabled:
@@ -159,7 +162,7 @@ def build_loaders(
             num_replicas=distributed.world_size,
             rank=distributed.rank,
             shuffle=True,
-            seed=config.seed,
+            seed=config.training.seed,
             drop_last=False,
         )
         train = DataLoader(
@@ -229,10 +232,10 @@ def _build_graph_dataset(
 ) -> GraphDataset:
     return GraphDataset(
         dataset,
-        radial_cutoff=config.radial_cutoff,
-        angle_cutoff=config.angle_cutoff,
-        cache_graphs=config.cache_graphs,
-        cache_size=config.graph_cache_size,
+        radial_cutoff=config.model.radial_cutoff,
+        angle_cutoff=config.model.angle_cutoff,
+        cache_graphs=config.data.cache_graphs,
+        cache_size=config.data.graph_cache_size,
     )
 
 
@@ -243,13 +246,13 @@ def _validate_sharded_dataset_cutoffs(
     _validate_sharded_cutoff(
         dataset,
         metadata_key="radial_cutoff",
-        expected=config.radial_cutoff,
+        expected=config.model.radial_cutoff,
         config_key="model.radial_cutoff",
     )
     _validate_sharded_cutoff(
         dataset,
         metadata_key="angle_cutoff",
-        expected=config.angle_cutoff,
+        expected=config.model.angle_cutoff,
         config_key="model.angle_cutoff",
     )
 

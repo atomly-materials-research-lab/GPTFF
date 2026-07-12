@@ -30,15 +30,15 @@ def loss_weight_active(weight: float) -> bool:
 
 
 def validate_required_labels(batch, config: TrainingConfig) -> None:
-    if not loss_weight_active(config.energy_loss_weight):
+    if not loss_weight_active(config.loss.energy_loss_weight):
         raise ValueError("energy_loss_weight must be positive.")
-    if not loss_weight_active(config.force_loss_weight):
+    if not loss_weight_active(config.loss.force_loss_weight):
         raise ValueError("force_loss_weight must be positive.")
     if batch.energy is None:
         raise ValueError("energy labels are required.")
     if batch.forces is None:
         raise ValueError("force labels are required.")
-    if loss_weight_active(config.stress_loss_weight) and batch.stress is None:
+    if loss_weight_active(config.loss.stress_loss_weight) and batch.stress is None:
         raise ValueError("stress labels are required when stress_loss_weight > 0.")
 
 
@@ -51,7 +51,7 @@ def compute_batch_loss(
     create_graph: bool,
 ) -> BatchLoss:
     validate_required_labels(batch, config)
-    compute_stress = loss_weight_active(config.stress_loss_weight)
+    compute_stress = loss_weight_active(config.loss.stress_loss_weight)
 
     energy_pred, force_pred, stress_pred = predict_energy_forces_stress(
         model,
@@ -70,11 +70,11 @@ def compute_batch_loss(
     energy_per_atom = energy_pred.view(-1) / num_atoms
     target_energy = batch.energy.view(-1) / num_atoms
     energy_loss = criterion(energy_per_atom, target_energy)
-    loss = loss + config.energy_loss_weight * energy_loss
+    loss = loss + config.loss.energy_loss_weight * energy_loss
     energy_mae = mae(energy_per_atom.detach(), target_energy.detach())
 
     force_loss = criterion(force_pred.reshape(-1), batch.forces.reshape(-1))
-    loss = loss + config.force_loss_weight * force_loss
+    loss = loss + config.loss.force_loss_weight * force_loss
     force_mae = mae(force_pred.detach().reshape(-1), batch.forces.detach().reshape(-1))
     force_count = int(batch.forces.numel())
 
@@ -82,7 +82,7 @@ def compute_batch_loss(
         # Dataset stress labels and reported stress metrics use GPa.
         stress_pred_gpa = stress_pred * EV_PER_ANG3_TO_GPA
         stress_loss = criterion(stress_pred_gpa.reshape(-1), batch.stress.reshape(-1))
-        loss = loss + config.stress_loss_weight * stress_loss
+        loss = loss + config.loss.stress_loss_weight * stress_loss
         stress_mae = mae(
             stress_pred_gpa.detach().reshape(-1),
             batch.stress.detach().reshape(-1),

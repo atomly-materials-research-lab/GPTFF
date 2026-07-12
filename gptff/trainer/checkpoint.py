@@ -27,7 +27,7 @@ def save_checkpoint(
         "best_validation_metric": float(best_force_mae),
         "training_config": config.checkpoint_dict(),
         "model_name": "GPTFF",
-        "model_config": config.to_model_config().to_dict(),
+        "model_config": config.model.to_dict(),
     }
     current_path = output_dir / "last.pt"
     torch.save(model_state, current_path)

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -19,7 +20,7 @@ from gptff.graph import CrystalGraphBatch, CrystalGraphConverter
 from gptff.model import GPTFFConfig
 from gptff.model.model import GPTFF
 from gptff.trainer import distributed as distributed_module
-from gptff.trainer.config import load_config
+from gptff.trainer.config import OptimizerConfig, load_config
 from gptff.trainer.distributed import (
     DistributedContext,
     barrier,
@@ -60,33 +61,33 @@ from gptff.utils.labels import EV_PER_ANG3_TO_GPA
 def test_trainer_config_parses_sections_without_side_effects():
     config = TrainingConfig.from_dict(_raw_config())
 
-    assert config.lr == 1e-3
-    assert config.num_workers == 0
-    assert config.optimizer_name == "AdamW"
-    assert config.scheduler == "CosLR"
-    assert config.scheduler_params == {}
-    assert config.dataset_path == "dataset.json"
-    assert config.dataset_format == "atomic_json"
-    assert config.validation_fraction == pytest.approx(0.5)
-    assert config.test_fraction == pytest.approx(0.0)
-    assert config.split_seed == 42
-    assert config.group_by_material is False
-    assert config.cache_graphs is True
-    assert config.graph_cache_size == 16
+    assert config.optimizer.learning_rate == 1e-3
+    assert config.training.num_workers == 0
+    assert config.optimizer.name == "AdamW"
+    assert config.optimizer.scheduler == "CosLR"
+    assert config.optimizer.scheduler_params == {}
+    assert config.data.dataset_path == "dataset.json"
+    assert config.data.dataset_format == "atomic_json"
+    assert config.data.validation_fraction == pytest.approx(0.5)
+    assert config.data.test_fraction == pytest.approx(0.0)
+    assert config.data.split_seed == 42
+    assert config.data.group_by_material is False
+    assert config.data.cache_graphs is True
+    assert config.data.graph_cache_size == 16
     assert config.element_references.source == {"1": -1.0, "3": 2.0}
-    assert config.element_refs == {"1": -1.0, "3": 2.0}
-    assert config.num_readout_layers == 4
-    assert config.readout_atom_norm is True
-    assert config.interaction_dropout == pytest.approx(0.1)
+    assert config.model.element_refs == {"1": -1.0, "3": 2.0}
+    assert config.model.num_readout_layers == 4
+    assert config.model.readout_atom_norm is True
+    assert config.model.interaction_dropout == pytest.approx(0.1)
     assert config.model.atom_attention.enabled is True
     assert config.model.atom_attention.use_ffn is False
     assert config.model.atom_attention.density_scale_init == pytest.approx(0.1)
     assert config.model.atom_attention.ffn_residual_scale_init == pytest.approx(1e-2)
-    assert config.amp is False
-    assert config.seed == 42
-    assert config.deterministic is True
-    assert config.distributed == "auto"
-    assert config.persistent_workers is False
+    assert config.training.amp is False
+    assert config.training.seed == 42
+    assert config.training.deterministic is True
+    assert config.training.distributed == "auto"
+    assert config.training.persistent_workers is False
     assert config.logging.wandb.enabled is True
     assert config.logging.wandb.project == "gptff"
     checkpoint_config = config.checkpoint_dict()
@@ -148,7 +149,7 @@ data:
     assert config.optimizer.name == "AdamW"
     assert config.optimizer.learning_rate == pytest.approx(1e-3)
     assert config.optimizer.weight_decay == pytest.approx(1e-2)
-    assert config.element_refs == pytest.approx({1: -1.0, 3: 2.0})
+    assert config.model.element_refs == pytest.approx({1: -1.0, 3: 2.0})
 
 
 def test_element_reference_file_requires_atomic_number_keys(tmp_path):
@@ -165,10 +166,10 @@ def test_training_config_builds_split_config_from_data_fields():
     raw_config = _raw_config()
     config = TrainingConfig.from_dict(raw_config)
 
-    assert config.validation_fraction == pytest.approx(0.5)
-    assert config.test_fraction == pytest.approx(0.0)
-    assert config.split_seed == 42
-    assert config.group_by_material is False
+    assert config.data.validation_fraction == pytest.approx(0.5)
+    assert config.data.test_fraction == pytest.approx(0.0)
+    assert config.data.split_seed == 42
+    assert config.data.group_by_material is False
 
 
 def test_training_config_rejects_removed_max_open_files():
@@ -186,8 +187,8 @@ def test_training_config_parses_sharded_graph_dataset_format():
 
     config = TrainingConfig.from_dict(raw_config)
 
-    assert config.dataset_path == "dataset.gptff"
-    assert config.dataset_format == "sharded_hdf5_graph"
+    assert config.data.dataset_path == "dataset.gptff"
+    assert config.data.dataset_format == "sharded_hdf5_graph"
 
 
 def test_training_config_parses_canonical_sections_without_legacy_keys():
@@ -246,7 +247,6 @@ def test_training_config_parses_persistent_workers():
     config = TrainingConfig.from_dict(raw_config)
 
     assert config.training.persistent_workers is True
-    assert config.persistent_workers is True
 
 
 def test_coslr_warmup_linearly_reaches_base_lr_before_cosine_decay():
@@ -295,7 +295,7 @@ def test_configured_scheduler_steps_per_epoch_controls_train_step_batches():
     }
     config = TrainingConfig.from_dict(raw_config)
 
-    steps_per_epoch = scheduler_steps_per_epoch(config.scheduler_params)
+    steps_per_epoch = scheduler_steps_per_epoch(config.optimizer.scheduler_params)
 
     assert steps_per_epoch == 4
     assert scheduler_step_batches(10, steps_per_epoch=steps_per_epoch) == {3, 5, 8, 10}
@@ -306,17 +306,19 @@ def test_small_training_loader_uses_achievable_cosine_schedule_length():
     raw_config["training"]["epochs"] = 4
     config = TrainingConfig.from_dict(raw_config)
     model = torch.nn.Linear(1, 1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.optimizer.learning_rate)
 
     scheduler = build_scheduler(optimizer, config, num_batches=2)
     assert scheduler is not None
-    assert effective_scheduler_steps_per_epoch(2, config.scheduler_params) == 2
+    assert effective_scheduler_steps_per_epoch(2, config.optimizer.scheduler_params) == 2
 
-    for _ in range(2 * config.epochs):
+    for _ in range(2 * config.training.epochs):
         optimizer.step()
         scheduler.step()
 
-    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * config.lr)
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(
+        0.01 * config.optimizer.learning_rate
+    )
 
 
 def test_trainer_small_loader_reaches_minimum_lr_end_to_end(tmp_path, monkeypatch):
@@ -348,12 +350,14 @@ def test_trainer_small_loader_reaches_minimum_lr_end_to_end(tmp_path, monkeypatc
     trainer.setup(_atomic_dataset(size=4))
 
     assert len(trainer.train_loader) == 3
-    for epoch in range(1, config.epochs + 1):
+    for epoch in range(1, config.training.epochs + 1):
         metrics = trainer.train_epoch(epoch)
         assert metrics.skipped_batches == 0
 
-    assert trainer.scheduler.last_epoch == 3 * config.epochs
-    assert trainer.optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * config.lr)
+    assert trainer.scheduler.last_epoch == 3 * config.training.epochs
+    assert trainer.optimizer.param_groups[0]["lr"] == pytest.approx(
+        0.01 * config.optimizer.learning_rate
+    )
 
 
 def test_lr_cycle_epochs_uses_epoch_units_and_stays_at_minimum_lr():
@@ -363,26 +367,30 @@ def test_lr_cycle_epochs_uses_epoch_units_and_stays_at_minimum_lr():
     raw_config["optimizer"]["lr_cycle_epochs"] = 1
     config = TrainingConfig.from_dict(raw_config)
     model = torch.nn.Linear(1, 1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.optimizer.learning_rate)
 
     scheduler = build_lr_scheduler(
         optimizer,
-        scheduler=config.scheduler,
-        learning_rate=config.lr,
-        epochs=config.epochs,
-        scheduler_params={**config.scheduler_params, "steps_per_epoch": 2},
+        scheduler=config.optimizer.scheduler,
+        learning_rate=config.optimizer.learning_rate,
+        epochs=config.training.epochs,
+        scheduler_params={**config.optimizer.scheduler_params, "steps_per_epoch": 2},
     )
 
-    assert config.scheduler_params == {"lr_cycle_epochs": 1.0}
+    assert config.optimizer.scheduler_params == {"lr_cycle_epochs": 1.0}
     for _ in range(2):
         optimizer.step()
         scheduler.step()
-    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * config.lr)
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(
+        0.01 * config.optimizer.learning_rate
+    )
 
     for _ in range(6):
         optimizer.step()
         scheduler.step()
-    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.01 * config.lr)
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(
+        0.01 * config.optimizer.learning_rate
+    )
 
 
 def test_multistep_default_milestones_scale_with_effective_steps_per_epoch():
@@ -434,17 +442,17 @@ def test_non_cosine_schedulers_build_with_default_config(
     raw_config["optimizer"].pop("scheduler_params")
     config = TrainingConfig.from_dict(raw_config)
     model = torch.nn.Linear(1, 1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.optimizer.learning_rate)
 
     scheduler = build_lr_scheduler(
         optimizer,
-        scheduler=config.scheduler,
-        learning_rate=config.lr,
-        epochs=config.epochs,
-        scheduler_params=config.scheduler_params,
+        scheduler=config.optimizer.scheduler,
+        learning_rate=config.optimizer.learning_rate,
+        epochs=config.training.epochs,
+        scheduler_params=config.optimizer.scheduler_params,
     )
 
-    assert config.scheduler_params == {}
+    assert config.optimizer.scheduler_params == {}
     assert isinstance(scheduler, scheduler_type)
 
 
@@ -456,15 +464,15 @@ def test_non_cosine_schedulers_reject_cosine_minimum_lr_config(scheduler_name):
     raw_config["optimizer"]["min_learning_rate"] = 1e-5
     config = TrainingConfig.from_dict(raw_config)
     model = torch.nn.Linear(1, 1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.optimizer.learning_rate)
 
     with pytest.raises(ValueError, match="min_learning_rate.*only supported by cosine"):
         build_lr_scheduler(
             optimizer,
-            scheduler=config.scheduler,
-            learning_rate=config.lr,
-            epochs=config.epochs,
-            scheduler_params=config.scheduler_params,
+            scheduler=config.optimizer.scheduler,
+            learning_rate=config.optimizer.learning_rate,
+            epochs=config.training.epochs,
+            scheduler_params=config.optimizer.scheduler_params,
         )
 
 
@@ -490,12 +498,12 @@ def test_training_config_parses_distributed_modes():
 
     config = TrainingConfig.from_dict(raw_config)
 
-    assert config.distributed == "true"
+    assert config.training.distributed == "true"
 
     raw_config["training"]["distributed"] = "false"
     config = TrainingConfig.from_dict(raw_config)
 
-    assert config.distributed == "false"
+    assert config.training.distributed == "false"
 
     raw_config["training"]["distributed"] = "bad"
     with pytest.raises(ValueError, match="distributed"):
@@ -542,11 +550,13 @@ def test_training_config_uses_optimizer_specific_weight_decay_defaults():
 
     assert config.optimizer.name == "AdamW"
     assert config.optimizer.weight_decay == pytest.approx(1e-2)
+    assert OptimizerConfig(learning_rate=1e-3).weight_decay == pytest.approx(1e-2)
 
     raw_config["optimizer"]["name"] = "Adam"
     config = TrainingConfig.from_dict(raw_config)
 
     assert config.optimizer.weight_decay == pytest.approx(0.0)
+    assert OptimizerConfig(learning_rate=1e-3, name="Adam").weight_decay == pytest.approx(0.0)
 
 
 def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
@@ -558,7 +568,7 @@ def test_build_optimizer_excludes_scales_norms_and_biases_from_weight_decay():
         "weight_decay": 1e-2,
     }
     config = TrainingConfig.from_dict(raw_config)
-    model = GPTFF(config.to_model_config())
+    model = GPTFF(config.model)
 
     optimizer = build_optimizer(model, config)
 
@@ -606,18 +616,17 @@ def test_training_config_disables_graph_cache_by_default():
 
     config = TrainingConfig.from_dict(raw_config)
 
-    assert config.cache_graphs is False
-    assert config.graph_cache_size is None
+    assert config.data.cache_graphs is False
+    assert config.data.graph_cache_size is None
 
 
 def test_cuda_amp_requires_explicit_amp_flag():
     config = TrainingConfig.from_dict(_raw_config())
-    config.device = "cuda"
-    config.amp = False
+    config.training = replace(config.training, device="cuda", amp=False)
 
     assert use_cuda_amp(config) is False
 
-    config.amp = True
+    config.training = replace(config.training, amp=True)
 
     assert use_cuda_amp(config) is True
 
@@ -681,7 +690,7 @@ def test_build_graph_datasets_validates_required_stress_before_training():
 def test_training_config_builds_model_config_only_from_model_fields():
     config = TrainingConfig.from_dict(_raw_config())
 
-    model_config = config.to_model_config()
+    model_config = config.model
 
     assert isinstance(model_config, GPTFFConfig)
     assert model_config.num_readout_layers == 4
@@ -710,7 +719,7 @@ def test_apply_fitted_element_refs_updates_checkpoint_config():
 
     apply_fitted_element_refs(config, samples)
 
-    assert config.element_refs == pytest.approx({"1": -1.0, "3": 2.0})
+    assert config.model.element_refs == pytest.approx({"1": -1.0, "3": 2.0})
     assert config.checkpoint_dict()["model"]["element_refs"] == pytest.approx({"1": -1.0, "3": 2.0})
     assert config.checkpoint_dict()["element_references"]["source"] == "fit"
 
@@ -1046,7 +1055,7 @@ def test_apply_fitted_element_refs_rejects_preloaded_refs_conflict():
     raw_config = _raw_config()
     raw_config["element_references"] = {"source": "fit"}
     config = TrainingConfig.from_dict(raw_config)
-    config.element_refs = {"1": -1.0}
+    config.model = replace(config.model, element_refs={"1": -1.0})
 
     with pytest.raises(ValueError, match="source='fit'"):
         apply_fitted_element_refs(config, [_sample([1], -1.0)])
@@ -1137,7 +1146,7 @@ def test_save_checkpoint_updates_best_energy_and_force_independently(tmp_path):
 
 def test_compute_batch_loss_requires_energy_and_force_batches():
     config = TrainingConfig.from_dict(_raw_config())
-    config.stress_loss_weight = 0.0
+    config.loss = replace(config.loss, stress_loss_weight=0.0)
 
     batch_loss = compute_batch_loss(
         _ConstantEnergyModel(),
@@ -1157,7 +1166,7 @@ def test_compute_batch_loss_requires_energy_and_force_batches():
 
 def test_compute_batch_loss_requires_force_labels():
     config = TrainingConfig.from_dict(_raw_config())
-    config.stress_loss_weight = 0.0
+    config.loss = replace(config.loss, stress_loss_weight=0.0)
 
     with pytest.raises(ValueError, match="force labels are required"):
         compute_batch_loss(
@@ -1171,8 +1180,11 @@ def test_compute_batch_loss_requires_force_labels():
 
 def test_compute_batch_loss_requires_positive_energy_and_force_weights():
     config = TrainingConfig.from_dict(_raw_config())
-    config.energy_loss_weight = 0.0
-    config.stress_loss_weight = 0.0
+    config.loss = replace(
+        config.loss,
+        energy_loss_weight=0.0,
+        stress_loss_weight=0.0,
+    )
 
     with pytest.raises(ValueError, match="energy_loss_weight must be positive"):
         compute_batch_loss(
@@ -1183,8 +1195,11 @@ def test_compute_batch_loss_requires_positive_energy_and_force_weights():
             create_graph=False,
         )
 
-    config.energy_loss_weight = 1.0
-    config.force_loss_weight = 0.0
+    config.loss = replace(
+        config.loss,
+        energy_loss_weight=1.0,
+        force_loss_weight=0.0,
+    )
     with pytest.raises(ValueError, match="force_loss_weight must be positive"):
         compute_batch_loss(
             _ConstantEnergyModel(),
@@ -1197,7 +1212,7 @@ def test_compute_batch_loss_requires_positive_energy_and_force_weights():
 
 def test_compute_batch_loss_requires_stress_labels_when_enabled():
     config = TrainingConfig.from_dict(_raw_config())
-    config.stress_loss_weight = 1.0
+    config.loss = replace(config.loss, stress_loss_weight=1.0)
 
     with pytest.raises(ValueError, match="stress labels are required"):
         compute_batch_loss(
@@ -1211,7 +1226,7 @@ def test_compute_batch_loss_requires_stress_labels_when_enabled():
 
 def test_compute_batch_loss_converts_native_stress_to_training_gpa(monkeypatch):
     config = TrainingConfig.from_dict(_raw_config())
-    config.stress_loss_weight = 1.0
+    config.loss = replace(config.loss, stress_loss_weight=1.0)
     batch = _energy_force_stress_batch()
 
     def fake_predict(*_args, **_kwargs):

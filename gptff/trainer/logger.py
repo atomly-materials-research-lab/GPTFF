@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import csv
-import math
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from gptff.trainer._utils import format_value
 from gptff.trainer.evaluation import (
     EvaluationRecord,
     format_evaluation_record,
@@ -100,12 +100,12 @@ class ConsoleLogger:
         print(
             "Epoch "
             f"{record.epoch}: "
-            f"train_MAE(e)={_format_value(record.train_energy_mae, 5)} "
-            f"train_MAE(f)={_format_value(record.train_force_mae, 5)} "
-            f"train_MAE(s)={_format_value(record.train_stress_mae, 3)} "
-            f"val_MAE(e)={_format_value(record.val_energy_mae, 5)} "
-            f"val_MAE(f)={_format_value(record.val_force_mae, 5)} "
-            f"val_MAE(s)={_format_value(record.val_stress_mae, 3)}",
+            f"train_MAE(e)={format_value(record.train_energy_mae, 5)} "
+            f"train_MAE(f)={format_value(record.train_force_mae, 5)} "
+            f"train_MAE(s)={format_value(record.train_stress_mae, 3)} "
+            f"val_MAE(e)={format_value(record.val_energy_mae, 5)} "
+            f"val_MAE(f)={format_value(record.val_force_mae, 5)} "
+            f"val_MAE(s)={format_value(record.val_stress_mae, 3)}",
             file=self.stream,
             flush=True,
         )
@@ -191,9 +191,3 @@ class CompositeLogger:
     def close(self) -> None:
         for logger in self.loggers:
             logger.close()
-
-
-def _format_value(value: float, precision: int) -> str:
-    if math.isnan(value):
-        return "n/a"
-    return f"{value:.{precision}f}"
