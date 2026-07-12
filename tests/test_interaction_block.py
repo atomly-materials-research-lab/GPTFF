@@ -146,6 +146,8 @@ def test_default_model_uses_interaction_blocks():
     assert not hasattr(model.interactions[0], "atom_edge_norm")
     assert not hasattr(model.interactions[0], "residual_zero_init")
     assert not hasattr(model.interactions[0].edge_update, "message_projection")
+    assert not hasattr(model.interactions[0].edge_update, "modulation_projection")
+    assert not hasattr(model.interactions[0].edge_update, "num_radial")
     assert isinstance(model.interactions[0].atom_update, AtomFeatureDelta)
     assert model.interactions[0].atom_ffn is None
     assert model.interactions[0].atom_ffn_norm is None
@@ -548,8 +550,8 @@ def test_zero_geometry_modulation_zeroes_interaction_deltas():
     atom_delta = block.atom_update(
         block.atom_norm(atom_fea),
         edge_ij,
-        zero_modulation.atom_message,
         graph,
+        zero_modulation.atom_message,
     )
 
     assert torch.equal(triplet_delta, torch.zeros_like(triplet_delta))
@@ -575,13 +577,47 @@ def test_atom_update_uses_sum_aggregation():
     atom_delta = block.atom_update(
         atom_fea,
         edge_ij,
-        torch.ones_like(atom_fea[graph.edge_index[0]]),
         graph,
+        torch.ones_like(atom_fea[graph.edge_index[0]]),
     )
     expected = torch.zeros_like(atom_fea)
     expected.index_add_(0, graph.edge_index[0], torch.ones_like(atom_fea[graph.edge_index[0]]))
 
     assert torch.equal(atom_delta, expected)
+
+
+def test_edge_update_rejects_wrong_modulation_width():
+    graph = _batch()
+    model = GPTFF(_cfg(atom_feature_dim=8, edge_feature_dim=6))
+    block = model.interactions[0]
+    atom_features = model.atom_embedding(graph.atom_types)
+    edge_features = _features(model, graph).edge_features
+    wrong_modulation = edge_features.new_ones((edge_features.shape[0], 8))
+
+    with pytest.raises(ValueError, match="edge feature dimension 6"):
+        block.edge_update(atom_features, edge_features, graph, wrong_modulation)
+
+
+def test_model_config_rejects_unknown_keys():
+    raw_config = {
+        "atom_feature_dim": 8,
+        "edge_feature_dim": 8,
+        "num_interaction_blocks": 1,
+        "num_head": 8,
+    }
+
+    with pytest.raises(ValueError, match="Unknown model config key.*num_head"):
+        GPTFFConfig.from_dict(raw_config)
+
+
+def test_atom_attention_config_rejects_unknown_keys():
+    with pytest.raises(ValueError, match="Unknown atom_attention config key.*num_head"):
+        GPTFFConfig(
+            atom_feature_dim=8,
+            edge_feature_dim=8,
+            num_interaction_blocks=1,
+            atom_attention={"num_head": 2},
+        )
 
 
 def test_radial_density_features_use_sum_aggregation():

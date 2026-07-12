@@ -53,7 +53,7 @@ class GPTFF(nn.Module):
                     num_angular=num_angular,
                     num_radial=num_radial,
                     dropout=config.interaction_dropout,
-                    atom_attention_config=config.atom_attention,
+                    atom_attention=config.atom_attention,
                 )
                 for _ in range(num_interaction_blocks)
             ]

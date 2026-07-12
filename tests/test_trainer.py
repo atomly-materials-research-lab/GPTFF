@@ -214,6 +214,14 @@ def test_training_config_parses_canonical_sections_without_legacy_keys():
     }
 
 
+def test_legacy_training_config_rejects_unknown_keys():
+    raw_config = _raw_config()
+    raw_config["training"]["num_head"] = 8
+
+    with pytest.raises(ValueError, match="Unknown model config key.*num_head"):
+        TrainingConfig.from_dict(raw_config)
+
+
 def test_training_config_preserves_scheduler_warmup_params():
     raw_config = _canonical_config()
     raw_config["optimizer"]["scheduler_params"] = {

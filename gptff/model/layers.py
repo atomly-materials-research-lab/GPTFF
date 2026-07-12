@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from gptff.model.basis import LegendreAngleBasis
+from gptff.model.config import AtomAttentionConfig
 
 
 def sum_aggregation(
@@ -92,16 +93,12 @@ class EdgeUpdate(nn.Module):
         self,
         atom_feature_dim,
         edge_feature_dim,
-        num_radial=None,
         *,
         dropout=0.0,
     ):
         super().__init__()
         self.atom_feature_dim = atom_feature_dim
         self.edge_feature_dim = edge_feature_dim
-        self.modulation_projection = (
-            nn.Linear(num_radial, edge_feature_dim, bias=False) if num_radial is not None else None
-        )
         self.message_gate = GatedMLP(
             2 * atom_feature_dim + edge_feature_dim,
             edge_feature_dim,
@@ -109,6 +106,10 @@ class EdgeUpdate(nn.Module):
         )
 
     def forward(self, atom_features, edge_features, graph, edge_modulation):
+        if edge_modulation.shape[-1] != self.edge_feature_dim:
+            raise ValueError(
+                f"edge_modulation must have edge feature dimension {self.edge_feature_dim}."
+            )
         pair_features = torch.cat(
             [
                 atom_features[graph.edge_index[0]],
@@ -119,12 +120,6 @@ class EdgeUpdate(nn.Module):
         )
 
         edge_message = self.message_gate(pair_features)
-        if edge_modulation.shape[-1] != self.edge_feature_dim:
-            if self.modulation_projection is None:
-                raise ValueError(
-                    f"edge_modulation must have edge feature dimension {self.edge_feature_dim}."
-                )
-            edge_modulation = self.modulation_projection(edge_modulation)
         return edge_message * edge_modulation
 
 
@@ -222,7 +217,7 @@ class AtomFeatureDelta(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, atom_features, edge_features, edge_modulation, graph):
+    def forward(self, atom_features, edge_features, graph, edge_modulation):
         pair_features = torch.cat(
             [
                 atom_features[graph.edge_index[0]],
@@ -483,14 +478,6 @@ class AtomFeedForward(nn.Module):
         return self.ffn(atom_features)
 
 
-def _attention_config_value(config, key, default):
-    if config is None:
-        return default
-    if isinstance(config, dict):
-        return config.get(key, default)
-    return getattr(config, key, default)
-
-
 class InteractionBlock(nn.Module):
     def __init__(
         self,
@@ -500,18 +487,14 @@ class InteractionBlock(nn.Module):
         num_radial,
         *,
         dropout=0.0,
-        atom_attention_config=None,
+        atom_attention: AtomAttentionConfig,
     ):
         super().__init__()
+        if not isinstance(atom_attention, AtomAttentionConfig):
+            raise TypeError("atom_attention must be an AtomAttentionConfig.")
 
         self.residual_dropout = nn.Dropout(dropout)
-        attention_enabled = bool(
-            _attention_config_value(
-                atom_attention_config,
-                "enabled",
-                True,
-            )
-        )
+        attention_enabled = atom_attention.enabled
         self.three_body = ThreeBodyEdgeDelta(
             atom_feature_dim=atom_feature_dim,
             edge_feature_dim=edge_feature_dim,
@@ -531,62 +514,24 @@ class InteractionBlock(nn.Module):
         self.atom_ffn_norm = None
         self.atom_ffn_residual_scale = None
         if attention_enabled:
-            attention_dropout = float(
-                _attention_config_value(
-                    atom_attention_config,
-                    "dropout",
-                    0.0,
-                )
-            )
-            attention_num_heads = int(
-                _attention_config_value(
-                    atom_attention_config,
-                    "num_heads",
-                    4,
-                )
-            )
-            use_ffn = bool(
-                _attention_config_value(
-                    atom_attention_config,
-                    "use_ffn",
-                    False,
-                )
-            )
-            ffn_hidden_dim = _attention_config_value(
-                atom_attention_config,
-                "ffn_hidden_dim",
-                None,
-            )
-            density_scale_init = float(
-                _attention_config_value(
-                    atom_attention_config,
-                    "density_scale_init",
-                    0.1,
-                )
-            )
-            ffn_residual_scale_init = float(
-                _attention_config_value(
-                    atom_attention_config,
-                    "ffn_residual_scale_init",
-                    1e-2,
-                )
-            )
             self.atom_update = AttentionAtomUpdate(
                 atom_feature_dim=atom_feature_dim,
                 edge_feature_dim=edge_feature_dim,
                 num_radial=num_radial,
-                num_heads=attention_num_heads,
-                dropout=attention_dropout,
-                density_scale_init=density_scale_init,
+                num_heads=atom_attention.num_heads,
+                dropout=atom_attention.dropout,
+                density_scale_init=atom_attention.density_scale_init,
             )
-            if use_ffn:
+            if atom_attention.use_ffn:
                 self.atom_ffn = AtomFeedForward(
                     atom_feature_dim,
-                    hidden_dim=ffn_hidden_dim,
-                    dropout=attention_dropout,
+                    hidden_dim=atom_attention.ffn_hidden_dim,
+                    dropout=atom_attention.dropout,
                 )
                 self.atom_ffn_norm = nn.LayerNorm(atom_feature_dim)
-                self.atom_ffn_residual_scale = nn.Parameter(torch.tensor(ffn_residual_scale_init))
+                self.atom_ffn_residual_scale = nn.Parameter(
+                    torch.tensor(atom_attention.ffn_residual_scale_init)
+                )
         else:
             self.atom_update = AtomFeatureDelta(
                 atom_feature_dim,
@@ -627,8 +572,8 @@ class InteractionBlock(nn.Module):
             atom_delta = self.atom_update(
                 normalized_atom_features,
                 edge_features,
-                atom_message_modulation,
                 graph,
+                atom_message_modulation,
             )
         atom_features = atom_features + self.residual_dropout(atom_delta)
 

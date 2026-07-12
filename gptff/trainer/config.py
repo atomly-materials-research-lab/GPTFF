@@ -11,6 +11,40 @@ import yaml
 from gptff.model import GPTFFConfig
 from gptff.trainer._utils import normalize_distributed_mode
 
+_LEGACY_NON_MODEL_KEYS = frozenset(
+    {
+        "epochs",
+        "batch_size",
+        "device",
+        "num_workers",
+        "workers",
+        "persistent_workers",
+        "amp",
+        "output_dir",
+        "grad_clip_norm",
+        "seed",
+        "deterministic",
+        "distributed",
+        "name",
+        "optimizer",
+        "learning_rate",
+        "lr",
+        "weight_decay",
+        "scheduler",
+        "scheduler_params",
+        "min_learning_rate",
+        "min_lr",
+        "lr_cycle_epochs",
+        "num_train_steps",
+        "energy_loss_weight",
+        "weight_energy",
+        "force_loss_weight",
+        "weight_force",
+        "stress_loss_weight",
+        "weight_stress",
+    }
+)
+
 
 @dataclass(frozen=True)
 class DataConfig:
@@ -186,6 +220,7 @@ class TrainingConfig:
                 "per shard file; control shard count during conversion with --num-process."
             )
         model = raw_config.get("model", training)
+        legacy_model_section = "model" not in raw_config
         optimizer = raw_config.get("optimizer", training)
         loss = raw_config.get("loss", training)
         epochs = int(_config_value(training, "epochs", "epochs"))
@@ -198,7 +233,12 @@ class TrainingConfig:
         )
         logging = LoggingConfig.from_dict(raw_config.get("logging", None))
         model_config = replace(
-            GPTFFConfig.from_dict(model),
+            GPTFFConfig.from_dict(
+                model,
+                _allowed_extra_keys=(
+                    _LEGACY_NON_MODEL_KEYS if legacy_model_section else frozenset()
+                ),
+            ),
             element_refs=element_references.model_element_refs(),
         )
 

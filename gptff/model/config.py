@@ -4,6 +4,42 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+_ATOM_ATTENTION_KEYS = frozenset(
+    {
+        "enabled",
+        "num_heads",
+        "dropout",
+        "use_ffn",
+        "ffn_hidden_dim",
+        "density_scale_init",
+        "ffn_residual_scale_init",
+    }
+)
+
+_GPTFF_CONFIG_KEYS = frozenset(
+    {
+        "atom_feature_dim",
+        "node_feature_len",
+        "edge_feature_dim",
+        "edge_feature_len",
+        "num_interaction_blocks",
+        "n_layers",
+        "num_radial",
+        "num_angular",
+        "radial_cutoff",
+        "angle_cutoff",
+        "cutoff_coeff",
+        "max_atomic_number",
+        "element_refs",
+        "num_readout_layers",
+        "n_readout_layers",
+        "readout_atom_norm",
+        "final_atom_norm",
+        "interaction_dropout",
+        "atom_attention",
+    }
+)
+
 
 @dataclass(frozen=True)
 class AtomAttentionConfig:
@@ -37,6 +73,7 @@ class AtomAttentionConfig:
             return cls(enabled=raw_config)
         if not isinstance(raw_config, Mapping):
             raise TypeError("atom_attention must be a mapping, boolean, or null.")
+        _reject_unknown_keys(raw_config, _ATOM_ATTENTION_KEYS, "atom_attention")
         return cls(
             enabled=bool(raw_config.get("enabled", True)),
             num_heads=int(raw_config.get("num_heads", 4)),
@@ -100,7 +137,17 @@ class GPTFFConfig:
             raise ValueError("atom_feature_dim must be divisible by atom_attention.num_heads.")
 
     @classmethod
-    def from_dict(cls, raw_config: Mapping[str, Any]) -> GPTFFConfig:
+    def from_dict(
+        cls,
+        raw_config: Mapping[str, Any],
+        *,
+        _allowed_extra_keys: frozenset[str] = frozenset(),
+    ) -> GPTFFConfig:
+        _reject_unknown_keys(
+            raw_config,
+            _GPTFF_CONFIG_KEYS | _allowed_extra_keys,
+            "model",
+        )
         return cls(
             atom_feature_dim=int(_config_value(raw_config, "atom_feature_dim", "node_feature_len")),
             edge_feature_dim=int(_config_value(raw_config, "edge_feature_dim", "edge_feature_len")),
@@ -162,3 +209,14 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _reject_unknown_keys(
+    config: Mapping[str, Any],
+    allowed_keys: frozenset[str],
+    section: str,
+) -> None:
+    unknown_keys = sorted(set(config) - allowed_keys, key=str)
+    if unknown_keys:
+        formatted = ", ".join(repr(key) for key in unknown_keys)
+        raise ValueError(f"Unknown {section} config key(s): {formatted}.")

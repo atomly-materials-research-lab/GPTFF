@@ -74,18 +74,22 @@ class CrystalGraphBatch:
         atom_counts = np.asarray([graph.num_atoms for graph in graphs], dtype=np.int64)
         edge_counts = np.asarray([graph.num_edges for graph in graphs], dtype=np.int64)
         atom_offsets = np.cumsum(np.concatenate([[0], atom_counts[:-1]])).astype(np.int64)
-        edge_offsets = np.cumsum(np.concatenate([[0], edge_counts[:-1]])).astype(np.int64)
+        edge_index_offsets = np.cumsum(np.concatenate([[0], edge_counts[:-1]])).astype(np.int64)
 
         atom_types = np.concatenate([graph.atom_types for graph in graphs])
         positions = np.concatenate([graph.positions for graph in graphs], axis=0)
         lattice = np.stack([graph.lattice for graph in graphs], axis=0)
-        graph_edge_offsets = np.concatenate([graph.edge_offsets for graph in graphs], axis=0)
+        periodic_edge_offsets = np.concatenate([graph.edge_offsets for graph in graphs], axis=0)
 
         shifted_edges = []
         shifted_triplets = []
-        for graph, atom_offset, edge_offset in zip(graphs, atom_offsets, edge_offsets):
+        for graph, atom_offset, edge_index_offset in zip(
+            graphs,
+            atom_offsets,
+            edge_index_offsets,
+        ):
             shifted_edges.append(graph.edge_index + atom_offset)
-            shifted_triplets.append(graph.triplet_edge_index + edge_offset)
+            shifted_triplets.append(graph.triplet_edge_index + edge_index_offset)
 
         edge_index = _concat_axis1(shifted_edges, rows=2, dtype=np.int64)
         triplet_edge_index = _concat_axis1(shifted_triplets, rows=2, dtype=np.int64)
@@ -100,7 +104,7 @@ class CrystalGraphBatch:
             radial_cutoff=radial_cutoff,
             angle_cutoff=angle_cutoff,
             edge_index=torch.tensor(edge_index, dtype=torch.long),
-            edge_offsets=torch.tensor(graph_edge_offsets, dtype=torch.float32),
+            edge_offsets=torch.tensor(periodic_edge_offsets, dtype=torch.float32),
             triplet_edge_index=torch.tensor(triplet_edge_index, dtype=torch.long),
             num_atoms=torch.tensor(atom_counts, dtype=torch.long),
             num_edges=torch.tensor(edge_counts, dtype=torch.long),
