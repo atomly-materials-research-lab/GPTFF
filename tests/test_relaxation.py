@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
+from ase.constraints import FixAtoms, FixSymmetry
 from ase.filters import FrechetCellFilter
 from pymatgen.core import Lattice, Structure
 
@@ -70,6 +71,44 @@ def test_ase_relaxation_runner_accepts_ase_atoms():
 
     assert isinstance(result.final_structure, Structure)
     assert result.final_structure.formula == "Na1"
+
+
+def test_fix_symmetry_preserves_existing_atom_constraints(monkeypatch):
+    atoms = Atoms(
+        "NaCl",
+        positions=[[0.0, 0.0, 0.0], [1.5, 1.5, 1.5]],
+        cell=[3.0, 3.0, 3.0],
+        pbc=True,
+    )
+    atoms.set_constraint(FixAtoms(indices=[0]))
+    observed_constraints = []
+    stripped_constraints = []
+    remove_fix_symmetry = ase_relaxation_module._without_fix_symmetry_constraint
+
+    def record_constraints(constrained_atoms):
+        observed_constraints.extend(constrained_atoms.constraints)
+        stripped_atoms = remove_fix_symmetry(constrained_atoms)
+        stripped_constraints.extend(stripped_atoms.constraints)
+        return stripped_atoms
+
+    monkeypatch.setattr(
+        ase_relaxation_module,
+        "_without_fix_symmetry_constraint",
+        record_constraints,
+    )
+    runner = ASERelaxationRunner(
+        ase_calculator=_ConstantCalculator(forces=np.zeros((2, 3))),
+        relax_atoms=False,
+        relax_cell=False,
+        fix_symmetry=True,
+    )
+
+    runner.run(atoms)
+
+    assert any(isinstance(constraint, FixAtoms) for constraint in observed_constraints)
+    assert any(isinstance(constraint, FixSymmetry) for constraint in observed_constraints)
+    assert any(isinstance(constraint, FixAtoms) for constraint in stripped_constraints)
+    assert not any(isinstance(constraint, FixSymmetry) for constraint in stripped_constraints)
 
 
 def test_ase_relaxation_runner_runs_atom_optimizer():

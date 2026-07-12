@@ -177,7 +177,9 @@ def _run_ase_relaxation(
     atoms = _to_ase_atoms(structure)
     initial_structure = _to_pmg_structure(atoms)
     if fix_symmetry:
-        atoms.set_constraint(FixSymmetry(atoms, symprec=symprec))
+        atoms.set_constraint(
+            [*atoms.constraints, FixSymmetry(atoms, symprec=symprec)]
+        )
     atoms.calc = calculator
 
     relaxation_requested = relax_atoms or relax_cell
