@@ -671,6 +671,18 @@ def test_should_skip_optimizer_step_is_local_without_ddp():
     assert should_skip_optimizer_step(_batch_loss(1.0), context, device="cpu") is False
 
 
+def test_should_skip_optimizer_step_propagates_remote_nonfinite_loss(monkeypatch):
+    context = DistributedContext(enabled=True, world_size=2, device="cpu")
+
+    def fake_all_reduce_max(tensor, _context):
+        tensor.fill_(1)
+        return tensor
+
+    monkeypatch.setattr(trainer_module, "all_reduce_max", fake_all_reduce_max)
+
+    assert should_skip_optimizer_step(_batch_loss(1.0), context, device="cpu") is True
+
+
 def test_build_graph_datasets_passes_graph_cache_config():
     config = TrainingConfig.from_dict(_raw_config())
 
@@ -957,6 +969,22 @@ def test_wandb_logger_can_be_disabled():
 
     logger.log_epoch(_epoch_record(epoch=1))
     logger.close()
+
+
+def test_wandb_evaluation_uses_next_step_instead_of_checkpoint_epoch():
+    calls = []
+    logger = object.__new__(WandBLogger)
+    logger._wandb = SimpleNamespace(
+        log=lambda payload, **kwargs: calls.append((payload, kwargs)),
+    )
+    logger._run = None
+
+    logger.log_epoch(_epoch_record(epoch=5))
+    logger.log_evaluation(_evaluation_record())
+
+    assert calls[0][1] == {"step": 5}
+    assert calls[1][0]["test_epoch"] == 4
+    assert calls[1][1] == {}
 
 
 def test_null_logger_is_noop():

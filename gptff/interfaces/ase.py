@@ -36,10 +36,10 @@ class ASECalculator(Calculator):
         self.model_config = self.potential.model_config
         self.model = self.potential.model
 
-    def predict_properties(self, batch):
+    def predict_properties(self, batch, *, compute_stress: bool = True):
         return self.potential.predict_batch(
             batch,
-            compute_stress=True,
+            compute_stress=compute_stress,
         )
 
     def calculate(
@@ -55,11 +55,18 @@ class ASECalculator(Calculator):
 
         graph = self.potential.graph_converter.convert_ase_atoms(atoms)
         batch = self.potential.batch_graphs([graph])
-        energy, forces, stress = self.predict_properties(batch)
-
-        self.results.update(
-            energy=float(energy.detach().cpu().item()),
-            free_energy=float(energy.detach().cpu().item()),
-            forces=forces.detach().cpu().numpy(),
-            stress=stress_matrix_to_ase_voigt(stress[0].detach().cpu().numpy()),
+        compute_stress = "stress" in properties
+        energy, forces, stress = self.predict_properties(
+            batch,
+            compute_stress=compute_stress,
         )
+
+        energy_value = float(energy.detach().cpu().item())
+        results = dict(
+            energy=energy_value,
+            free_energy=energy_value,
+            forces=forces.detach().cpu().numpy(),
+        )
+        if stress is not None:
+            results["stress"] = stress_matrix_to_ase_voigt(stress[0].detach().cpu().numpy())
+        self.results.update(results)

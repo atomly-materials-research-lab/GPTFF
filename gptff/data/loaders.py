@@ -144,6 +144,7 @@ def build_loaders(
     distributed=None,
 ) -> DataLoaders:
     distributed = distributed or _NoDistributedContext()
+    _validate_graph_cache_worker_lifetime(config, datasets)
     pin_memory = torch.device(config.training.device).type == "cuda"
     common = {
         "batch_size": config.training.batch_size,
@@ -198,6 +199,26 @@ def build_loaders(
             **common,
         )
     return DataLoaders(train=train, validation=validation, test=test, train_sampler=train_sampler)
+
+
+def _validate_graph_cache_worker_lifetime(
+    config: TrainingConfig,
+    datasets: GraphDatasetSplits,
+) -> None:
+    if config.training.num_workers == 0 or config.training.persistent_workers:
+        return
+    graph_datasets = (datasets.train, datasets.validation, datasets.test)
+    if any(
+        isinstance(dataset, GraphDataset)
+        and dataset.cache_graphs
+        and dataset.cache_size != 0
+        for dataset in graph_datasets
+        if dataset is not None
+    ):
+        raise ValueError(
+            "data.cache_graphs=true with training.num_workers>0 requires "
+            "training.persistent_workers=true so worker caches survive between epochs."
+        )
 
 
 class DistributedSequentialSampler(Sampler[int]):

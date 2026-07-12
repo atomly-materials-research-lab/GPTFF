@@ -121,12 +121,14 @@ class ShardedGraphDataset(Dataset):
         *,
         name: str | None = None,
     ) -> ShardedGraphDataset:
+        records = tuple(self.records[int(index)] for index in indices)
         metadata = dict(self.metadata)
+        metadata["num_samples"] = len(records)
         if name is not None:
             metadata["name"] = name
         return type(self)(
             self.root,
-            records=tuple(self.records[int(index)] for index in indices),
+            records=records,
             metadata=metadata,
         )
 

@@ -72,7 +72,8 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
     checkpoint_path = _write_test_checkpoint(tmp_path)
     calc = ASECalculator(model_path=checkpoint_path, device="cpu")
 
-    def fake_predict_properties(batch):
+    def fake_predict_properties(batch, *, compute_stress):
+        assert compute_stress is True
         return (
             torch.tensor([1.0]),
             torch.zeros((2, 3)),
@@ -104,6 +105,31 @@ def test_ase_calculator_returns_stress_in_ase_voigt_units(tmp_path):
         stress,
         np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
     )
+
+
+def test_ase_calculator_skips_stress_for_force_only_requests(tmp_path):
+    checkpoint_path = _write_test_checkpoint(tmp_path)
+    calc = ASECalculator(model_path=checkpoint_path, device="cpu")
+    compute_stress_values = []
+
+    def fake_predict_properties(batch, *, compute_stress):
+        compute_stress_values.append(compute_stress)
+        return torch.tensor([1.0]), torch.zeros((2, 3)), None
+
+    calc.predict_properties = fake_predict_properties
+    atoms = Atoms(
+        "NaCl",
+        positions=[[0, 0, 0], [1.5, 1.5, 1.5]],
+        cell=[3, 3, 3],
+        pbc=True,
+    )
+    atoms.calc = calc
+
+    forces = atoms.get_forces()
+
+    assert forces.shape == (2, 3)
+    assert compute_stress_values == [False]
+    assert "stress" not in calc.results
 
 
 def _write_test_checkpoint(tmp_path):

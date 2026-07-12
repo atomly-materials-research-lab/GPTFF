@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -243,11 +242,13 @@ def should_skip_optimizer_step(
     *,
     device: str,
 ) -> bool:
-    local_skip = int(has_nonfinite_loss(batch_loss))
-    if not context.enabled:
-        return bool(local_skip)
-    skip = torch.tensor([local_skip], dtype=torch.int64, device=torch.device(device))
-    all_reduce_sum(skip, context)
+    skip = (~torch.isfinite(batch_loss.loss.detach())).to(
+        dtype=torch.int64,
+        device=torch.device(device),
+    ).reshape(1)
+    if context.enabled:
+        # Every rank must make the same decision before DDP backward collectives.
+        all_reduce_max(skip, context)
     return bool(skip.item() > 0)
 
 
@@ -392,8 +393,6 @@ def train_one_epoch(
         update_metrics(metrics, batch_loss)
         progress.set_postfix(loss=f"{metrics.loss.avg:.5f}", refresh=False)
 
-    torch.cuda.empty_cache()
-    gc.collect()
     return metrics
 
 
@@ -437,8 +436,6 @@ def validate(
         update_metrics(metrics, batch_loss)
         progress.set_postfix(loss=f"{metrics.loss.avg:.5f}", refresh=False)
 
-    torch.cuda.empty_cache()
-    gc.collect()
     return metrics
 
 

@@ -169,7 +169,9 @@ class WandBLogger:
             for key, value in record.as_dict().items()
             if key != "split"
         }
-        self._wandb.log(payload, step=record.epoch)
+        # Evaluation can describe an earlier checkpoint than the latest logged epoch.
+        # Let W&B assign the next step so it does not discard an out-of-order record.
+        self._wandb.log(payload)
 
     def close(self) -> None:
         if self._run is not None:

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import h5py
 import numpy as np
 import pytest
@@ -198,8 +200,10 @@ def test_sharded_graph_dataset_roundtrip_and_subset(tmp_path):
     assert all(shard._file is None for shard in dataset._shard_datasets)
     assert dataset.metadata["num_shards"] == 2
     assert dataset.metadata["samples_per_shard"] == 1
+    assert dataset.metadata["num_samples"] == len(dataset) == 2
     assert dataset.metadata["radial_cutoff"] == pytest.approx(2.0)
     assert dataset.metadata["angle_cutoff"] == pytest.approx(2.0)
+    assert subset.metadata["num_samples"] == len(subset) == 1
     assert subset.sample_key(0) == "frame-1"
     assert subset.material_id(0) == "mat-b"
     assert sample.energy == pytest.approx(-1.0)
@@ -350,6 +354,19 @@ def test_build_loaders_respects_persistent_workers_config(tmp_path):
 
     assert loaders.train.persistent_workers is True
     assert loaders.validation.persistent_workers is True
+
+
+def test_graph_cache_requires_persistent_multiprocessing_workers():
+    config = _sharded_training_config("unused", num_workers=1, persistent_workers=False)
+    config.data = replace(config.data, cache_graphs=True)
+    datasets = build_graph_datasets(_dataset(4), config)
+
+    with pytest.raises(ValueError, match="cache_graphs.*persistent_workers"):
+        build_loaders(
+            config,
+            datasets,
+            generators=create_data_loader_generators(config.training.seed),
+        )
 
 
 def test_build_loaders_uses_distributed_samplers_without_eval_padding(tmp_path):
