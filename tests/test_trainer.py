@@ -1,5 +1,7 @@
 import json
 import random
+import subprocess
+import sys
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1300,15 +1302,66 @@ def test_gather_object_to_main_collects_rank_ordered_states(monkeypatch):
 
 
 def test_gather_object_to_main_with_real_gloo_process_group(tmp_path):
-    init_path = tmp_path / "gloo-init"
+    worker_path = tmp_path / "gather_worker.py"
     result_path = tmp_path / "gathered.pt"
+    worker_path.write_text(
+        """\
+import sys
 
-    torch.multiprocessing.spawn(
-        _gather_rng_state_process,
-        args=(str(init_path), str(result_path)),
-        nprocs=2,
-        join=True,
+import torch
+
+from gptff.trainer.checkpoint import capture_local_rng_state
+from gptff.trainer.distributed import DistributedContext, gather_object_to_main
+from gptff.utils.reproducibility import create_data_loader_generators
+
+rank = int(sys.argv[1])
+torch.distributed.init_process_group(
+    "gloo",
+    init_method=sys.argv[2],
+    rank=rank,
+    world_size=2,
+)
+try:
+    context = DistributedContext(
+        enabled=True,
+        rank=rank,
+        local_rank=rank,
+        world_size=2,
+        device="cpu",
     )
+    local_state = {
+        "rank": rank,
+        "rng": capture_local_rng_state(
+            create_data_loader_generators(42 + rank),
+            device="cpu",
+        ),
+    }
+    gathered = gather_object_to_main(local_state, context)
+    if rank == 0:
+        torch.save(gathered, sys.argv[3])
+finally:
+    torch.distributed.destroy_process_group()
+"""
+    )
+    init_uri = (tmp_path / "gloo-init").as_uri()
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(worker_path),
+                str(rank),
+                init_uri,
+                str(result_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for rank in range(2)
+    ]
+    outputs = [process.communicate(timeout=60) for process in processes]
+    for process, (stdout, stderr) in zip(processes, outputs):
+        assert process.returncode == 0, stdout + stderr
 
     gathered = torch.load(result_path, map_location="cpu", weights_only=True)
     assert [state["rank"] for state in gathered] == [0, 1]
@@ -1799,35 +1852,6 @@ def _checkpoint_training_state(model):
         device="cpu",
     )
     return optimizer, None, scaler, [rng_state]
-
-
-def _gather_rng_state_process(rank, init_path, result_path):
-    torch.distributed.init_process_group(
-        "gloo",
-        init_method=f"file://{init_path}",
-        rank=rank,
-        world_size=2,
-    )
-    try:
-        context = DistributedContext(
-            enabled=True,
-            rank=rank,
-            local_rank=rank,
-            world_size=2,
-            device="cpu",
-        )
-        local_state = {
-            "rank": rank,
-            "rng": capture_local_rng_state(
-                create_data_loader_generators(42 + rank),
-                device="cpu",
-            ),
-        }
-        gathered = gather_object_to_main(local_state, context)
-        if rank == 0:
-            torch.save(gathered, result_path)
-    finally:
-        torch.distributed.destroy_process_group()
 
 
 def _test_data_state():
