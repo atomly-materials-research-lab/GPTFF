@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 
 import gptff
 from gptff.runtime import GPTFFPotential as RuntimeGPTFFPotential
@@ -31,10 +32,12 @@ assert first is gptff.GPTFFPotential
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
-def test_source_tree_version_falls_back_to_pyproject(monkeypatch) -> None:
+def test_version_fallback_matches_package_layout(monkeypatch) -> None:
     def missing_distribution(_name: str) -> str:
         raise PackageNotFoundError
 
     monkeypatch.setattr(gptff, "version", missing_distribution)
 
-    assert gptff._resolve_version() == "0.1.0"
+    pyproject_path = Path(gptff.__file__).resolve().parent.parent / "pyproject.toml"
+    expected = "0.1.0" if pyproject_path.is_file() else "0+unknown"
+    assert gptff._resolve_version() == expected

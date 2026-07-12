@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -26,7 +28,10 @@ def test_packaged_default_model_matches_pretrained_directory_copy():
     checksum = model_checksum()
     assert checksum == get_model_spec().sha256
     assert checksum == path_checksum(
-        "pretrained/MatPES-PBE-2025.2/GPTFF-MatPES_PBE_2025.2.pt"
+        Path(__file__).resolve().parents[1]
+        / "pretrained"
+        / "MatPES-PBE-2025.2"
+        / "GPTFF-MatPES_PBE_2025.2.pt"
     )
 
 
