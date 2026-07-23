@@ -16,6 +16,10 @@ cd GPTFF
 pip install -e .
 ```
 
+Pretrained checkpoints are organized by application under `pretrained/`.
+See [`pretrained/README.md`](pretrained/README.md) for the inorganic and
+molecular model catalog.
+
 ## Usage
 
 **Fast Energy(eV), Force(eV/Å), Stress(GPa) calculation:**
@@ -25,7 +29,7 @@ from gptff.model.mpredict import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 device = 'cuda' # or cpu
 p = ASECalculator(model_weight, device) # Initialize the model and load weights
 
@@ -48,7 +52,7 @@ from gptff.model.mpredict import ASECalculator
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 device = "cuda"  # or "cpu"
 calc = ASECalculator(model_weight, device)
 
@@ -77,7 +81,7 @@ from ase.optimize.fire import FIRE
 from ase.filters import FrechetCellFilter
 import ase
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 device = 'cuda' # or cpu
 p = ASECalculator(model_weight, device) # Initialize the model and load weights
 
@@ -104,7 +108,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from ase.optimize.fire import FIRE
 from ase.optimize.bfgs import BFGS
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 device = 'cuda' # or cpu
 p = ASECalculator(model_weight, device) # Initialize the model and load weights
 
@@ -130,7 +134,7 @@ from ase import Atoms, units
 from ase.md.nvtberendsen import NVTBerendsen
 import os
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 device = 'cuda' # or cpu
 p = ASECalculator(model_weight, device) # Initialize the model and load weights
 
@@ -168,7 +172,7 @@ import torch_sim as ts
 from ase.io import read
 from gptff.model.torchsim import GPTFFTorchSimModel
 
-model_weight = "pretrained/gptff_v1.pth"
+model_weight = "pretrained/inorganic/gptff_v1.pth"
 model = GPTFFTorchSimModel(model_weight,
                            device="cuda",
                            dtype=torch.float32,
