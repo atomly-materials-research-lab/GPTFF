@@ -277,7 +277,7 @@ The file `config.json` includes training settings,
 
 The pretrained checkpoints correspond to two application domains:
 
-- Models under `pretrained/inorganic/` were trained on inorganic materials datasets and correspond to the original GPTFF article:
+- Models under `pretrained/inorganic/` were trained on the Atomly inorganic materials datasets and correspond to the original GPTFF article:
 
 ```bibtex
 @article{XIE2024,
