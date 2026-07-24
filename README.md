@@ -275,9 +275,11 @@ The file `config.json` includes training settings,
 
 ## Reference
 
-If you found GPTFF useful, please cite our article:
+The pretrained checkpoints correspond to two application domains:
 
-```
+- Models under `pretrained/inorganic/` were trained on inorganic materials datasets and correspond to the original GPTFF article:
+
+```bibtex
 @article{XIE2024,
 title = {GPTFF: A high-accuracy out-of-the-box universal AI force field for arbitrary inorganic materials},
 journal = {Science Bulletin},
@@ -287,5 +289,20 @@ doi = {https://doi.org/10.1016/j.scib.2024.08.039},
 url = {https://www.sciencedirect.com/science/article/pii/S2095927324006327},
 author = {Fankai Xie and Tenglong Lu and Sheng Meng and Miao Liu},
 keywords = {Data Science, Molecular Dynamics, Graph Neural Network, Universal Fore Field},
+}
+```
+
+- Models under `pretrained/molecular/` were trained on the OpenGEM26 organic molecule dataset and correspond to our latest GPTFF-mol article:
+
+```bibtex
+@misc{huang2026gptffmol,
+title = {Graph Neural Network Force Fields (GPTFF-mol) for Organic Molecules from Optimization Trajectories (OpenGEM26)},
+author = {Yifan Huang and Fankai Xie and Jiangnan Zheng and Tenglong Lu and Sheng Meng and Miao Liu},
+year = {2026},
+eprint = {2607.21369},
+archivePrefix = {arXiv},
+primaryClass = {physics.chem-ph},
+doi = {10.48550/arXiv.2607.21369},
+url = {https://arxiv.org/abs/2607.21369},
 }
 ```
