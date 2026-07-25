@@ -1,4 +1,11 @@
-GPTFF (Graph-based Pretrained Transformer Force Field) can simulate arbitrary inorganic systems with good precision and generalizability.
+> [!NOTE]
+> The `main` branch contains the current stable implementation, while the
+> `develop` branch contains an optimized code architecture under active
+> development. After both models have been trained with the new architecture,
+> the default codebase will migrate to `develop`.
+
+GPTFF (Graph-based Pretrained Transformer Force Field) provides pretrained
+force fields for inorganic materials and organic molecules.
 
 ## Installation
 
@@ -42,6 +49,27 @@ energy = atoms.get_potential_energy() # unit (eV)
 forces = atoms.get_forces() # unit (eV/Å)
 stress = atoms.get_stress() # unit (GPa)
 ```
+
+**Molecular models:**
+
+Molecular checkpoints use a different set of atomic reference energies. Select
+the molecular profile explicitly when loading either molecular checkpoint:
+
+```python
+from gptff.model.mpredict import ASECalculator
+
+model_weight = "pretrained/molecular/force/force_v1.pth"
+device = "cuda"  # or "cpu"
+calc = ASECalculator(
+    model_weight,
+    device,
+    reference_energies="molecular",
+)
+```
+
+The default profile is `"inorganic"` for backward compatibility. A custom
+one-dimensional array of atomic reference energies can also be passed through
+`reference_energies`.
 
 **Batched energy inference (high-throughput):**
 
@@ -188,6 +216,9 @@ forces = results["forces"]   # unit (eV/Å)
 stress = results["stress"]   # unit (eV/Å^3); use stress_unit="GPa" to match ASE
 ```
 
+For a molecular checkpoint, pass `reference_energies="molecular"` to
+`GPTFFTorchSimModel` as well.
+
 ## Model training
 
 `config.json` would be training parameters, you could specify data path in this file.
@@ -254,7 +285,8 @@ atom_refs = np.array([
        -1.43116273e+01, -1.47003999e+01, -1.54726487e+01])
 ```
 
-Or you can fit you own `atom_refs`.
+Or you can fit your own `atom_refs` and pass them to `ASECalculator` through
+the `reference_energies` argument.
 
 ## Training setting
 

@@ -8,6 +8,11 @@ from tqdm import tqdm
 from gptff.utils_.compute_tp import compute_tp_cc
 from gptff.utils_.compute_nb import find_neighbors
 from gptff.utils_.data import collate_fn as training_collate_fn
+from gptff.model.reference_energies import (
+    INORGANIC_ATOM_REFS,
+    ReferenceEnergies,
+    resolve_reference_energies,
+)
 import os, psutil, time
 
 # lightweight, ASE-proof file logger (same idea as prior mem_log)
@@ -61,33 +66,10 @@ def _pair_and_triple_features(coords, offsets, lattice, n_atoms, pairs_count, nb
     triple_a_jik = torch.clamp(triple_a_jik, -1.0, 1.0) * (1 - 1e-6)
     return coords, lattices, pair_dist_ij, triple_dist_ij, triple_dist_ik, triple_a_jik
 
-atom_refs = np.array([ 0.00000000e+00, -3.46535853e+00, -7.56101906e-01, -3.46224791e+00,
-       -4.77600176e+00, -8.03619240e+00, -8.40374071e+00, -7.76814618e+00,
-       -7.38918302e+00, -4.94725878e+00, -2.92883670e-02, -2.47830716e+00,
-       -2.02015956e+00, -5.15479820e+00, -7.91209653e+00, -6.91345095e+00,
-       -4.62278149e+00, -3.01552069e+00, -6.27971322e-02, -2.31732442e+00,
-       -4.75968073e+00, -8.17421803e+00, -1.14207788e+01, -8.92294483e+00,
-       -8.48981509e+00, -8.16635547e+00, -6.58248850e+00, -5.26139665e+00,
-       -4.48412068e+00, -3.27367370e+00, -1.34976438e+00, -3.62637456e+00,
-       -4.67270042e+00, -4.13166577e+00, -3.67546394e+00, -2.80302539e+00,
-        6.47272418e+00, -2.24681188e+00, -4.25110577e+00, -1.02452951e+01,
-       -1.16658385e+01, -1.18015760e+01, -8.65537518e+00, -9.36409198e+00,
-       -7.57165084e+00, -5.69907599e+00, -4.97159232e+00, -1.88700594e+00,
-       -6.79483530e-01, -2.74880153e+00, -3.79441765e+00, -3.38825264e+00,
-       -2.55867271e+00, -1.96213610e+00,  9.97909972e+00, -2.55677995e+00,
-       -4.88030347e+00, -8.86033743e+00, -9.05368602e+00, -7.94309693e+00,
-       -8.12585485e+00, -6.31826210e+00, -8.30242223e+00, -1.22893251e+01,
-       -1.73097460e+01, -7.55105974e+00, -8.19580521e+00, -8.34926874e+00,
-       -7.25911206e+00, -8.41697224e+00, -3.38725429e+00, -7.68222088e+00,
-       -1.26297007e+01, -1.36257602e+01, -9.52985029e+00, -1.18396814e+01,
-       -9.79914325e+00, -7.55608603e+00, -5.46902454e+00, -2.65092136e+00,
-        4.17472161e-01, -2.32548971e+00, -3.48299933e+00, -3.18067109e+00,
-        3.57605604e-15,  9.96350211e-16,  1.18278079e-15, -1.44201673e-15,
-       -6.73760309e-18, -5.48347781e+00, -1.03346396e+01, -1.11296117e+01,
-       -1.43116273e+01, -1.47003999e+01, -1.54726487e+01])
+atom_refs = INORGANIC_ATOM_REFS
 
 class custom_graph(object):
-    def __init__(self, pbc=[1, 1, 1], r_cut=5.0, a_cut=3.5, atom_refs=atom_refs):
+    def __init__(self, pbc=(1, 1, 1), r_cut=5.0, a_cut=3.5, atom_refs=atom_refs):
         """
         r_cut: cutoff for bonds
         a_cut: cutoff for angles
@@ -96,12 +78,19 @@ class custom_graph(object):
         self.r_cut = r_cut
         self.a_cut = a_cut
         self.pbc = pbc
-        self.atom_refs = atom_refs
+        self.atom_refs = resolve_reference_energies(atom_refs)
         
     def transform(self, crystal):
         coords = np.asarray(crystal.get_positions(), dtype=np.float64)
         lattice = np.asarray(crystal.cell.array, dtype=np.float64)
         atom_fea = np.asarray(crystal.get_atomic_numbers(), dtype=np.int64).reshape(-1, 1)
+
+        unsupported = np.unique(atom_fea[atom_fea >= len(self.atom_refs)])
+        if unsupported.size:
+            raise ValueError(
+                "The selected reference energies do not cover atomic numbers: "
+                + ", ".join(str(int(number)) for number in unsupported)
+            )
 
         i, j, offsets, d_ij = find_neighbors(coords, lattice, self.r_cut, np.array(self.pbc, dtype=np.int32))
         nbr_atoms = np.array([i, j], dtype=np.int32).T
@@ -189,10 +178,22 @@ def collate_fn(data):
 
 
 class ASECalculator(Calculator):
+    """ASE calculator for GPTFF checkpoints.
+
+    ``reference_energies`` accepts the built-in ``"inorganic"`` and
+    ``"molecular"`` profiles or a custom one-dimensional array indexed by
+    atomic number.
+    """
 
     implemented_properties = ["energy", "free_energy", "forces", "stress"]
 
-    def __init__(self, model_path, device='cuda', **kwargs):
+    def __init__(
+        self,
+        model_path,
+        device='cuda',
+        reference_energies: ReferenceEnergies = "inorganic",
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         self.state = _load_checkpoint(model_path, device)
@@ -209,7 +210,8 @@ class ASECalculator(Calculator):
         for param in self.model.parameters():
             param.requires_grad_(False)
         self.model.eval()
-        self.graph = custom_graph()
+        self.reference_energies = resolve_reference_energies(reference_energies)
+        self.graph = custom_graph(atom_refs=self.reference_energies)
 
     def _model_energy(self, atom_fea, pair_dist_ij, n_atoms, triple_dist_ij, triple_dist_ik, triple_a_jik, nbr_atoms, n_bond_pairs_bond, bond_pairs_indices, ref_energy):
         energy = self.model(

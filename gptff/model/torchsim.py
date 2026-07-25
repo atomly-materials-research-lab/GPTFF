@@ -10,12 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-import numpy as np
 import torch
 from torch import Tensor
 
 from gptff.model import model
-from gptff.model.mpredict import CFG, _load_checkpoint, atom_refs
+from gptff.model.mpredict import CFG, _load_checkpoint
+from gptff.model.reference_energies import (
+    ReferenceEnergies,
+    resolve_reference_energies,
+)
 
 try:
     import torch_sim as ts
@@ -137,7 +140,7 @@ class GPTFFTorchSimModel(ModelInterface):
         neighbor_list_fn: NeighborListFn = torchsim_nl,
         r_cut: float = 5.0,
         a_cut: float = 3.5,
-        reference_energies: np.ndarray = atom_refs,
+        reference_energies: ReferenceEnergies = "inorganic",
         stress_unit: str = "ev_per_ang3",
     ) -> None:
         super().__init__()
@@ -168,7 +171,11 @@ class GPTFFTorchSimModel(ModelInterface):
             parameter.requires_grad_(False)
         self.gptff_model.eval()
 
-        refs = torch.as_tensor(reference_energies, dtype=self._dtype, device=self._device)
+        refs = torch.as_tensor(
+            resolve_reference_energies(reference_energies),
+            dtype=self._dtype,
+            device=self._device,
+        )
         self.register_buffer("atom_refs", refs, persistent=False)
 
     def _build_gptff_inputs(
@@ -179,6 +186,15 @@ class GPTFFTorchSimModel(ModelInterface):
     ) -> tuple[Tensor, ...]:
         system_idx = state.system_idx.to(device=self._device, dtype=torch.long)
         atomic_numbers = state.atomic_numbers.to(device=self._device, dtype=torch.long).view(-1)
+        unsupported = torch.unique(atomic_numbers[atomic_numbers >= self.atom_refs.numel()])
+        if unsupported.numel():
+            unsupported_text = ", ".join(
+                str(int(number)) for number in unsupported.detach().cpu().tolist()
+            )
+            raise ValueError(
+                "The selected reference energies do not cover atomic numbers: "
+                + unsupported_text
+            )
         cell = state.row_vector_cell.to(device=self._device, dtype=self._dtype)
         pbc = state.pbc.to(device=self._device)
         cutoff = torch.tensor(self.r_cut, device=self._device, dtype=self._dtype)

@@ -8,4 +8,7 @@ main.py
 *.egg*
 *.gz
 *.whl
+*.so
+*.pyd
+*.dylib
 dist
